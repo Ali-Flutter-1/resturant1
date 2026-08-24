@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:practice/core/network/api_failure.dart';
 import 'package:practice/features/orders/domain/customer_order.dart';
 import 'package:practice/features/cart/cart_cubit.dart';
@@ -191,9 +193,18 @@ class FakeOrderRepository implements OrderRepository {
 
   @override
   Future<CustomerOrder> orderById(String id) async {
+    orderByIdCalls++;
+    // Held open so a test can tap again while the first fetch is in flight,
+    // which is exactly when a second sheet used to appear.
+    if (detailGate != null) await detailGate!.future;
     if (failure != null) throw failure!;
     return orders.firstWhere((order) => order.id == id);
   }
+
+  int orderByIdCalls = 0;
+
+  /// Completed by the test to let a stalled detail fetch finish.
+  Completer<void>? detailGate;
 
   @override
   Future<CustomerOrder> cancel(String id, {String? reason}) async {

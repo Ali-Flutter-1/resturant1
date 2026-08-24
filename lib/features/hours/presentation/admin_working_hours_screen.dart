@@ -55,16 +55,10 @@ class _AdminHoursView extends StatelessWidget {
         final cubit = context.read<WorkingHoursCubit>();
 
         return Scaffold(
-          appBar: AppBar(
-            title: const Text('Opening hours'),
-            actions: [
-              if (state.isDirty)
-                TextButton(
-                  onPressed: state.saving ? null : cubit.discard,
-                  child: const Text('Discard'),
-                ),
-            ],
-          ),
+          // Nothing in the actions: discarding is half of the same decision
+          // as saving, and the two belonged together rather than at opposite
+          // ends of the screen.
+          appBar: AppBar(title: const Text('Opening hours')),
           body: switch (state.status) {
             HoursStatus.loading => const MessageListSkeleton(rows: 7),
             HoursStatus.failure when state.failure != null => ApiErrorView(
@@ -96,7 +90,11 @@ class _AdminHoursView extends StatelessWidget {
             ),
           },
           bottomNavigationBar: state.isDirty
-              ? _SaveBar(state: state, onSave: () => _save(context))
+              ? _SaveBar(
+                  state: state,
+                  onSave: () => _save(context),
+                  onDiscard: cubit.discard,
+                )
               : null,
         );
       },
@@ -348,10 +346,15 @@ class _TimeButton extends StatelessWidget {
 }
 
 class _SaveBar extends StatelessWidget {
-  const _SaveBar({required this.state, required this.onSave});
+  const _SaveBar({
+    required this.state,
+    required this.onSave,
+    required this.onDiscard,
+  });
 
   final WorkingHoursState state;
   final VoidCallback onSave;
+  final VoidCallback onDiscard;
 
   @override
   Widget build(BuildContext context) {
@@ -386,18 +389,37 @@ class _SaveBar extends StatelessWidget {
             ),
             const SizedBox(height: AppSpacing.x2),
           ],
-          FilledButton(
-            onPressed: state.canSave ? onSave : null,
-            style: FilledButton.styleFrom(
-              minimumSize: const Size.fromHeight(50),
-            ),
-            child: state.saving
-                ? const SizedBox(
-                    width: 20,
-                    height: 20,
-                    child: CircularProgressIndicator(strokeWidth: 2),
-                  )
-                : const Text('Save the week'),
+          Row(
+            children: [
+              // The quieter of the two, and on the left, so the thumb lands on
+              // "save" rather than on the one that throws the week away.
+              TextButton(
+                onPressed: state.saving ? null : onDiscard,
+                style: TextButton.styleFrom(
+                  // A finite width: `Size.fromHeight` is `Size(infinity, 50)`,
+                  // which a Row cannot lay out.
+                  minimumSize: const Size(96, 50),
+                  foregroundColor: context.surfaces.inkMuted,
+                ),
+                child: const Text('Discard'),
+              ),
+              const SizedBox(width: AppSpacing.x3),
+              Expanded(
+                child: FilledButton(
+                  onPressed: state.canSave ? onSave : null,
+                  style: FilledButton.styleFrom(
+                    minimumSize: const Size.fromHeight(50),
+                  ),
+                  child: state.saving
+                      ? const SizedBox(
+                          width: 20,
+                          height: 20,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Text('Save the week'),
+                ),
+              ),
+            ],
           ),
         ],
       ),

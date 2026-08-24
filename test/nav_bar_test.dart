@@ -293,6 +293,38 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
+  testWidgets('the dark pill stays a wash, so the label stays readable', (
+    tester,
+  ) async {
+    await tester.pumpWidget(wrap(theme: AppTheme.dark, currentIndex: 1));
+    await tester.pumpAndSettle();
+
+    final pill = tester
+        .widgetList<Container>(
+          find.descendant(
+            of: find.byType(AppNavBar),
+            matching: find.byType(Container),
+          ),
+        )
+        .map((c) => (c.decoration as BoxDecoration?)?.color)
+        .whereType<Color>()
+        .reduce((a, b) => a.a >= b.a ? a : b);
+
+    // The dark palette's container is a 13% crimson wash. Fading it in with
+    // `withValues(alpha: t)` *replaced* that alpha, so at full selection the
+    // pill became solid crimson -- the very colour the label is drawn in, and
+    // the label disappeared into it. Light mode was unaffected only because
+    // its container is opaque to begin with.
+    expect(pill.a, lessThan(0.5));
+
+    final label = tester.widget<Text>(find.text('Orders'));
+    final ink = label.style!.color!;
+    expect(ink.a, 1.0);
+
+    // The two must not be the same colour at the same strength.
+    expect(pill.a, isNot(closeTo(ink.a, 0.01)));
+  });
+
   testWidgets('only the selected tab shows its name', (tester) async {
     await tester.pumpWidget(live());
     await tester.pumpAndSettle();

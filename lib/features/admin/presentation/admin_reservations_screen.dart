@@ -355,8 +355,26 @@ void _showBooking(BuildContext context, String id) {
   ).whenComplete(cubit.closeDetail);
 }
 
-class _BookingDetail extends StatelessWidget {
+class _BookingDetail extends StatefulWidget {
   const _BookingDetail();
+
+  @override
+  State<_BookingDetail> createState() => _BookingDetailState();
+}
+
+class _BookingDetailState extends State<_BookingDetail> {
+  /// The last booking this sheet actually rendered.
+  ///
+  /// Closing clears `detail` while the dismiss animation is still running, and
+  /// the sheet fell back to its spinner -- which, being a [Center], expands to
+  /// whatever height it is offered, so the sheet grew as it slid away.
+  ReservationDetail? _last;
+
+  @override
+  void initState() {
+    super.initState();
+    _last = context.read<AdminBookingsCubit>().state.detail;
+  }
 
   /// Runs a move, asking for a reason first where the API requires one.
   Future<void> _move(
@@ -451,12 +469,15 @@ class _BookingDetail extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return BlocBuilder<AdminBookingsCubit, AdminBookingsState>(
+    return BlocConsumer<AdminBookingsCubit, AdminBookingsState>(
+      listenWhen: (_, state) => state.detail != null,
+      listener: (_, state) => _last = state.detail,
       builder: (context, state) {
-        final booking = state.detail;
+        final booking = state.detail ?? _last;
         if (booking == null) {
-          return const Padding(
-            padding: EdgeInsets.all(AppSpacing.x8),
+          // Bounded on purpose: an unbounded `Center` takes the whole sheet.
+          return const SizedBox(
+            height: 160,
             child: Center(child: CircularProgressIndicator()),
           );
         }

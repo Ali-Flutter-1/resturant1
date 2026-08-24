@@ -10,6 +10,7 @@ import '../../../core/haptics/app_haptics.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../core/theme/app_spacing.dart';
 import '../../../shared/widgets/app_chip.dart';
+import '../../../shared/widgets/app_surface.dart';
 import '../../../shared/widgets/app_sheet.dart';
 import '../../../shared/widgets/dish_image.dart';
 import '../../menu/domain/dish.dart';
@@ -63,21 +64,88 @@ class _DishEditor extends StatefulWidget {
   State<_DishEditor> createState() => _DishEditorState();
 }
 
+/// Forgets any unfinished new dish.
+///
+/// The draft is deliberately session-scoped, which in a test means it outlives
+/// the test that made it. Each one starts from a clean form by calling this.
+@visibleForTesting
+void resetDishDraft() => _DishDraft.current = null;
+
+/// What an unfinished new dish looked like when its sheet was dismissed.
+///
+/// Held for the session only, and only for a *new* dish. Adding one takes a
+/// name, a description, a price, times, categories and a photograph, and a
+/// stray tap outside the sheet threw all of it away -- so the next attempt
+/// started from an empty form. Restoring it costs nothing and loses nothing:
+/// it is cleared the moment the dish is saved, and "Start again" is one tap.
+///
+/// Deliberately not persisted to disk. A draft is a convenience within a
+/// sitting, not a document, and writing half-finished menu entries to storage
+/// invites them to reappear days later next to a menu that has moved on.
+class _DishDraft {
+  _DishDraft({
+    required this.name,
+    required this.description,
+    required this.price,
+    required this.prepMin,
+    required this.prepMax,
+    required this.selected,
+    required this.pendingCategories,
+    required this.pendingLogos,
+    required this.hasSpiceLevels,
+    required this.pickedPath,
+  });
+
+  final String name;
+  final String description;
+  final String price;
+  final String prepMin;
+  final String prepMax;
+  final Set<String> selected;
+  final List<String> pendingCategories;
+  final Map<String, String> pendingLogos;
+  final bool hasSpiceLevels;
+  final String? pickedPath;
+
+  /// Whether there is anything worth keeping. An untouched form is not a draft.
+  bool get isWorthKeeping =>
+      name.trim().isNotEmpty ||
+      description.trim().isNotEmpty ||
+      price.trim().isNotEmpty ||
+      selected.isNotEmpty ||
+      pendingCategories.isNotEmpty ||
+      pickedPath != null;
+
+  /// The one in hand, if any.
+  static _DishDraft? current;
+}
+
 class _DishEditorState extends State<_DishEditor> {
-  late final _name = TextEditingController(text: widget.dish?.name ?? '');
+  /// The draft to open with, and null whenever this sheet is editing a dish
+  /// that already exists -- restoring a half-typed *new* dish over a real one
+  /// would silently rewrite it.
+  late final _DishDraft? _draft = widget.dish == null
+      ? _DishDraft.current
+      : null;
+
+  late final _name = TextEditingController(
+    text: _draft?.name ?? widget.dish?.name ?? '',
+  );
   late final _description = TextEditingController(
-    text: widget.dish?.description ?? '',
+    text: _draft?.description ?? widget.dish?.description ?? '',
   );
   late final _price = TextEditingController(
-    text: widget.dish == null
-        ? ''
-        : (widget.dish!.pricePence / 100).toStringAsFixed(2),
+    text:
+        _draft?.price ??
+        (widget.dish == null
+            ? ''
+            : (widget.dish!.pricePence / 100).toStringAsFixed(2)),
   );
   late final _prepMin = TextEditingController(
-    text: widget.dish?.prepMinMinutes?.toString() ?? '15',
+    text: _draft?.prepMin ?? widget.dish?.prepMinMinutes?.toString() ?? '15',
   );
   late final _prepMax = TextEditingController(
-    text: widget.dish?.prepMaxMinutes?.toString() ?? '20',
+    text: _draft?.prepMax ?? widget.dish?.prepMaxMinutes?.toString() ?? '20',
   );
   final _newCategory = TextEditingController();
 
@@ -88,30 +156,34 @@ class _DishEditorState extends State<_DishEditor> {
   /// Selected category ids. A set because the API takes several — a dish can
   /// appear in more than one section of the menu.
   late final Set<String> _selected = {
+    ...?_draft?.selected,
     for (final c in widget.dish?.categories ?? const <MenuCategory>[]) c.id,
   };
 
   /// Names typed in but not yet created server-side. Created on save, because
   /// creating one per keystroke would litter the menu with categories from
   /// abandoned edits.
-  final List<String> _pendingCategories = [];
+  late final List<String> _pendingCategories = [...?_draft?.pendingCategories];
 
   /// A logo picked for a category that does not exist yet, by name.
   ///
   /// Uploaded after the category is created on save, because the endpoint needs
   /// the category's id — which is exactly why the picture has to be held here
   /// rather than sent when it was chosen.
-  final Map<String, String> _pendingCategoryLogos = {};
+  late final Map<String, String> _pendingCategoryLogos = {
+    ...?_draft?.pendingLogos,
+  };
 
   /// Whether this dish offers Low/Mid/High to the customer.
-  late bool _hasSpiceLevels = widget.dish?.hasSpiceLevels ?? false;
+  late bool _hasSpiceLevels =
+      _draft?.hasSpiceLevels ?? widget.dish?.hasSpiceLevels ?? false;
 
   /// Photographs already on the dish, kept so an edit that doesn't touch the
   /// picture doesn't drop it.
   late List<DishPhoto> _existingImages = [...?widget.dish?.images];
 
   /// A local file path from the camera or gallery, previewed before upload.
-  String? _pickedPath;
+  late String? _pickedPath = _draft?.pickedPath;
 
   bool _picking = false;
   bool _saving = false;
@@ -124,6 +196,7 @@ class _DishEditorState extends State<_DishEditor> {
 
   @override
   void dispose() {
+    _rememberDraft();
     _name.dispose();
     _description.dispose();
     _price.dispose();
@@ -132,6 +205,55 @@ class _DishEditorState extends State<_DishEditor> {
     _newCategory.dispose();
     super.dispose();
   }
+
+  /// Holds on to an unfinished new dish, so dismissing the sheet by accident
+  /// does not cost the admin everything they typed.
+  void _rememberDraft() {
+    // An edit belongs to its dish, and a saved dish is finished. Neither is a
+    // draft, and keeping either would put the wrong content in the next sheet.
+    if (widget.dish != null || _saved) return;
+
+    final draft = _DishDraft(
+      name: _name.text,
+      description: _description.text,
+      price: _price.text,
+      prepMin: _prepMin.text,
+      prepMax: _prepMax.text,
+      selected: {..._selected},
+      pendingCategories: [..._pendingCategories],
+      pendingLogos: {..._pendingCategoryLogos},
+      hasSpiceLevels: _hasSpiceLevels,
+      pickedPath: _pickedPath,
+    );
+    _DishDraft.current = draft.isWorthKeeping ? draft : null;
+  }
+
+  /// Set once the dish reaches the server, so the draft is not resurrected.
+  bool _saved = false;
+
+  /// Empties the form and forgets the draft behind it.
+  void _startAgain() {
+    _DishDraft.current = null;
+    setState(() {
+      _name.clear();
+      _description.clear();
+      _price.clear();
+      _prepMin.text = '15';
+      _prepMax.text = '20';
+      _selected.clear();
+      _pendingCategories.clear();
+      _pendingCategoryLogos.clear();
+      _hasSpiceLevels = false;
+      _pickedPath = null;
+      _error = null;
+      // Cleared as well, or `dispose` would write the old draft straight back.
+      _restored = false;
+    });
+  }
+
+  /// Whether the banner is still worth showing. Separate from [_draft], which
+  /// is read once and has to stay constant for the field initialisers.
+  late bool _restored = _draft != null;
 
   String get _previewSource =>
       _pickedPath ?? (_existingImages.isEmpty ? '' : _existingImages.first.url);
@@ -333,6 +455,8 @@ class _DishEditorState extends State<_DishEditor> {
             );
 
       if (!mounted) return;
+      _saved = true;
+      _DishDraft.current = null;
       AppHaptics.success();
       Navigator.of(context).pop(saved);
     } on ApiFailure catch (failure) {
@@ -397,6 +521,37 @@ class _DishEditorState extends State<_DishEditor> {
             ),
             const SizedBox(height: AppSpacing.x4),
 
+            // Said out loud, because silently repopulating a form is
+            // indistinguishable from the app having saved something it hasn't.
+            if (_restored && !_saving) ...[
+              AppSurface.row(
+                padding: const EdgeInsets.all(AppSpacing.x3),
+                child: Row(
+                  children: [
+                    Icon(
+                      Icons.history,
+                      size: AppIconSize.lg,
+                      color: context.surfaces.inkSoft,
+                    ),
+                    const SizedBox(width: AppSpacing.x3),
+                    Expanded(
+                      child: Text(
+                        'Picked up where you left off.',
+                        style: context.texts.bodySmall?.copyWith(
+                          color: context.surfaces.inkMuted,
+                        ),
+                      ),
+                    ),
+                    TextButton(
+                      onPressed: _startAgain,
+                      child: const Text('Start again'),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: AppSpacing.x4),
+            ],
+
             Text('Description', style: context.texts.titleMedium),
             const SizedBox(height: AppSpacing.x2),
             TextField(
@@ -409,61 +564,61 @@ class _DishEditorState extends State<_DishEditor> {
             ),
             const SizedBox(height: AppSpacing.x4),
 
-            Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Expanded(
-                  child: _Labelled(
-                    label: 'Price',
+            _Labelled(
+              label: 'Price',
+              child: TextField(
+                controller: _price,
+                enabled: !_saving,
+                keyboardType: const TextInputType.numberWithOptions(
+                  decimal: true,
+                ),
+                decoration: const InputDecoration(
+                  hintText: '12.50',
+                  prefixText: '£ ',
+                ),
+              ),
+            ),
+            const SizedBox(height: AppSpacing.x4),
+
+            // A row of its own, rather than sharing one with the price.
+            //
+            // Two fields in half a row, with a dash between them and "min"
+            // inside the second, left each field about thirty points of text
+            // area on a phone: "20" showed as "2". The unit belongs in the
+            // label, where it is said once and costs no width.
+            _Labelled(
+              label: 'Prep time (minutes)',
+              child: Row(
+                children: [
+                  Expanded(
                     child: TextField(
-                      controller: _price,
+                      controller: _prepMin,
                       enabled: !_saving,
-                      keyboardType: const TextInputType.numberWithOptions(
-                        decimal: true,
-                      ),
-                      decoration: const InputDecoration(
-                        hintText: '12.50',
-                        prefixText: '£ ',
+                      keyboardType: TextInputType.number,
+                      decoration: const InputDecoration(hintText: '15'),
+                    ),
+                  ),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: AppSpacing.x3,
+                    ),
+                    child: Text(
+                      'to',
+                      style: context.texts.bodyMedium?.copyWith(
+                        color: context.surfaces.inkSoft,
                       ),
                     ),
                   ),
-                ),
-                const SizedBox(width: AppSpacing.x3),
-                Expanded(
-                  child: _Labelled(
-                    label: 'Prep time',
-                    child: Row(
-                      children: [
-                        Expanded(
-                          child: TextField(
-                            controller: _prepMin,
-                            enabled: !_saving,
-                            keyboardType: TextInputType.number,
-                            decoration: const InputDecoration(hintText: '15'),
-                          ),
-                        ),
-                        const Padding(
-                          padding: EdgeInsets.symmetric(
-                            horizontal: AppSpacing.x1,
-                          ),
-                          child: Text('–'),
-                        ),
-                        Expanded(
-                          child: TextField(
-                            controller: _prepMax,
-                            enabled: !_saving,
-                            keyboardType: TextInputType.number,
-                            decoration: const InputDecoration(
-                              hintText: '20',
-                              suffixText: 'min',
-                            ),
-                          ),
-                        ),
-                      ],
+                  Expanded(
+                    child: TextField(
+                      controller: _prepMax,
+                      enabled: !_saving,
+                      keyboardType: TextInputType.number,
+                      decoration: const InputDecoration(hintText: '20'),
                     ),
                   ),
-                ),
-              ],
+                ],
+              ),
             ),
             const SizedBox(height: AppSpacing.x4),
 

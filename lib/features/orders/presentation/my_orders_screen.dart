@@ -480,30 +480,49 @@ class _LiveOrderCard extends StatelessWidget {
 }
 
 /// A finished order: one line, tappable for the receipt.
-class _PastOrderRow extends StatelessWidget {
+class _PastOrderRow extends StatefulWidget {
   const _PastOrderRow({required this.order});
 
   final CustomerOrder order;
 
   @override
+  State<_PastOrderRow> createState() => _PastOrderRowState();
+}
+
+class _PastOrderRowState extends State<_PastOrderRow> {
+  /// True from the tap until the receipt is on screen.
+  ///
+  /// Fetching the receipt takes a moment and the row gave no sign it had
+  /// heard, so a second tap sent a second request and opened a second sheet on
+  /// top of the first. The first tap now takes the row out of service.
+  bool _opening = false;
+
+  Future<void> _open() async {
+    if (_opening) return;
+    setState(() => _opening = true);
+    AppHaptics.toggle();
+
+    // The list endpoint sends no lines, so the receipt is fetched. If the
+    // fetch fails the summary is shown anyway — a total and a date is still
+    // most of a receipt, and an error sheet would be less.
+    final cubit = context.read<OrdersCubit>();
+    final detailed = await cubit.loadDetail(widget.order.id);
+    if (!mounted) return;
+    setState(() => _opening = false);
+    _showReceipt(context, detailed ?? widget.order);
+  }
+
+  @override
   Widget build(BuildContext context) {
     final surfaces = context.surfaces;
     final scheme = Theme.of(context).colorScheme;
+    final order = widget.order;
 
     return Material(
       color: Colors.transparent,
       borderRadius: BorderRadius.circular(AppRadius.md),
       child: InkWell(
-        onTap: () async {
-          AppHaptics.toggle();
-          // The list endpoint sends no lines, so the receipt is fetched. If the
-          // fetch fails the summary is shown anyway — a total and a date is
-          // still most of a receipt, and an error sheet would be less.
-          final cubit = context.read<OrdersCubit>();
-          final detailed = await cubit.loadDetail(order.id);
-          if (!context.mounted) return;
-          _showReceipt(context, detailed ?? order);
-        },
+        onTap: _opening ? null : _open,
         borderRadius: BorderRadius.circular(AppRadius.md),
         child: AppSurface.row(
           padding: const EdgeInsets.all(AppSpacing.x3 + 2),
@@ -560,6 +579,27 @@ class _PastOrderRow extends StatelessWidget {
                     background: order.status.container(context),
                   ),
                 ],
+              ),
+              // Always the same width, spinning or not, so the row does not
+              // shift sideways the instant it is tapped.
+              SizedBox(
+                width: AppIconSize.xl,
+                child: Center(
+                  child: _opening
+                      ? SizedBox(
+                          width: AppIconSize.md,
+                          height: AppIconSize.md,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            color: scheme.primary,
+                          ),
+                        )
+                      : Icon(
+                          Icons.chevron_right,
+                          size: AppIconSize.lg,
+                          color: surfaces.inkSoft,
+                        ),
+                ),
               ),
             ],
           ),

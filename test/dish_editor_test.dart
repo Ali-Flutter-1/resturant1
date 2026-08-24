@@ -19,6 +19,9 @@ void main() {
   Dish? saved;
 
   setUp(() {
+    // The draft is session-scoped by design, so it outlives the test that
+    // made it unless each one starts clean.
+    resetDishDraft();
     repository = FakeAdminMenuRepository();
     saved = null;
   });
@@ -533,6 +536,71 @@ void main() {
       await tester.tap(find.text('Done'));
       await tester.pumpAndSettle();
       expect(chip('Curry Dishes'), findsOneWidget);
+    });
+
+    group('an unfinished dish survives a dismissed sheet', () {
+      testWidgets('what was typed comes back, and can be discarded', (
+        tester,
+      ) async {
+        await openWithProvider(tester);
+
+        await tester.enterText(
+          find.widgetWithText(TextField, 'Jaffna Crab Curry'),
+          'Devilled Prawns',
+        );
+        await tester.enterText(
+          find.widgetWithText(TextField, '12.50'),
+          '14.00',
+        );
+        await tester.pumpAndSettle();
+
+        // Dismissed without saving -- a stray tap outside, or the back gesture.
+        Navigator.of(tester.element(find.byType(TextField).first)).pop();
+        await tester.pumpAndSettle();
+
+        await openWithProvider(tester);
+
+        // Everything typed is still there, and the sheet says why rather than
+        // silently repopulating -- which is indistinguishable from the app
+        // having saved something it has not.
+        expect(find.text('Devilled Prawns'), findsOneWidget);
+        expect(find.text('14.00'), findsOneWidget);
+        expect(find.text('Picked up where you left off.'), findsOneWidget);
+
+        await tester.ensureVisible(find.text('Start again'));
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('Start again'));
+        await tester.pumpAndSettle();
+
+        expect(find.text('Devilled Prawns'), findsNothing);
+        expect(find.text('Picked up where you left off.'), findsNothing);
+      });
+
+      testWidgets('a saved dish leaves no draft behind', (tester) async {
+        await openWithProvider(tester);
+
+        await tester.enterText(
+          find.widgetWithText(TextField, 'Jaffna Crab Curry'),
+          'Devilled Prawns',
+        );
+        await tester.enterText(
+          find.widgetWithText(TextField, '12.50'),
+          '14.00',
+        );
+        await tester.pumpAndSettle();
+        await tester.tap(chip('Curry Dishes'));
+        await tester.pumpAndSettle();
+
+        await tester.tap(find.text('Add dish'));
+        await tester.pumpAndSettle();
+
+        await openWithProvider(tester);
+
+        // Finished work is not a draft. Bringing it back would offer to add the
+        // same dish twice.
+        expect(find.text('Devilled Prawns'), findsNothing);
+        expect(find.text('Picked up where you left off.'), findsNothing);
+      });
     });
   });
 }

@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
@@ -468,6 +469,41 @@ void main() {
 
       // A history screen with nothing live must not keep waking the network up.
       expect(settled.loadCount, 1);
+    });
+
+    testWidgets('taps while the receipt is loading do not stack sheets', (
+      tester,
+    ) async {
+      final repository = FakeOrderRepository(
+        orders: [
+          OrderFixtures.order(
+            id: '1',
+            reference: '#0041',
+            status: CustomerOrderStatus.completed,
+          ),
+        ],
+      )..detailGate = Completer<void>();
+
+      await tester.pumpWidget(wrap(repository));
+      await tester.pump(const Duration(seconds: 2));
+
+      // Three impatient taps while the fetch is still in flight.
+      await tester.tap(find.text('#0041'));
+      await tester.pump();
+      await tester.tap(find.text('#0041'), warnIfMissed: false);
+      await tester.pump();
+      await tester.tap(find.text('#0041'), warnIfMissed: false);
+      await tester.pump();
+
+      // One request, not three.
+      expect(repository.orderByIdCalls, 1);
+
+      repository.detailGate!.complete();
+      await tester.pumpAndSettle();
+
+      // And one sheet. Three would have stacked, and closing the top one
+      // would reveal another underneath.
+      expect(find.text('Order #0041'), findsOne);
     });
 
     testWidgets('tapping a past order opens its receipt', (tester) async {

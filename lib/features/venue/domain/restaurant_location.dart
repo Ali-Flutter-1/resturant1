@@ -36,14 +36,25 @@ abstract final class RestaurantLocation {
   /// `daddr` / `destination` mean the venue is the destination and the user's
   /// position is the origin, which is what "directions" means to a customer.
   static Uri directionsUrl({required bool isApple}) {
-    final point = '$latitude,$longitude';
+    final point = Uri.encodeComponent('$latitude,$longitude');
     return Uri.parse(
       isApple
-          // `q` only labels the pin; `daddr` is what actually routes.
-          ? 'https://maps.apple.com/?daddr=${Uri.encodeComponent(point)}'
-                '&q=${Uri.encodeComponent(name)}'
+          // `dirflg=d` is what opens the driving *route* rather than a map with
+          // a pin on it. `q` used to be here as a label, but Apple Maps reads
+          // it as a search: given both, it ran the search and showed where the
+          // customer was standing instead of the way here, which is precisely
+          // the complaint.
+          //
+          // No `saddr`, deliberately -- leaving the origin out is what makes
+          // Apple use "Current Location", and naming one would send people from
+          // an address they are not at.
+          ? 'https://maps.apple.com/?daddr=$point&dirflg=d'
+          // Google's own documented directions form. `travelmode` matters for
+          // the same reason `dirflg` does: without it the link can open the
+          // place card rather than the route.
           : 'https://www.google.com/maps/dir/?api=1'
-                '&destination=${Uri.encodeComponent(point)}',
+                '&destination=$point'
+                '&travelmode=driving',
     );
   }
 }

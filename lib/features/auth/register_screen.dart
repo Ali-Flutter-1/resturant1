@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import '../../core/animations/page_transitions.dart';
+import '../legal/presentation/legal_screen.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 
 import '../../core/animations/motion.dart';
@@ -244,7 +246,13 @@ class _RegisterScreenState extends State<RegisterScreen> {
                       ),
               ),
 
-              const SizedBox(height: AppSpacing.x6),
+              const SizedBox(height: AppSpacing.x4),
+              // Above "Sign in" rather than buried under it: this is the
+              // sentence somebody is agreeing to by tapping the button just
+              // above, so it belongs next to that button.
+              const _LegalNotice(),
+
+              const SizedBox(height: AppSpacing.x4),
               Row(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
@@ -267,6 +275,79 @@ class _RegisterScreenState extends State<RegisterScreen> {
             ].revealStaggered(),
           );
         },
+      ),
+    );
+  }
+}
+
+/// What creating an account signs you up to.
+///
+/// Built from real widgets rather than one `Text.rich`: a tappable `TextSpan`
+/// is invisible to a screen reader, which reads the whole sentence as plain
+/// prose with no way into either document, and it cannot be given a hit target
+/// of its own. A [Wrap] keeps the sentence flowing across lines.
+///
+/// Not a tick-box, either. A checkbox adds a step and makes nobody read
+/// anything; the documents are one tap away either way.
+class _LegalNotice extends StatelessWidget {
+  const _LegalNotice();
+
+  void _open(BuildContext context, LegalDocument document) {
+    Navigator.of(
+      context,
+    ).push(AppPageRoute<void>(builder: (_) => LegalScreen(document: document)));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final quiet = context.texts.bodySmall?.copyWith(
+      color: context.surfaces.inkSoft,
+    );
+
+    return Wrap(
+      alignment: WrapAlignment.center,
+      crossAxisAlignment: WrapCrossAlignment.center,
+      children: [
+        Text('By creating an account you agree to our ', style: quiet),
+        _LegalLink(
+          label: 'Terms and Conditions',
+          onTap: () => _open(context, LegalDocument.terms),
+        ),
+        Text(' and ', style: quiet),
+        _LegalLink(
+          label: 'Privacy Policy',
+          onTap: () => _open(context, LegalDocument.privacy),
+        ),
+        Text('.', style: quiet),
+      ],
+    );
+  }
+}
+
+class _LegalLink extends StatelessWidget {
+  const _LegalLink({required this.label, required this.onTap});
+
+  final String label;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final accent = Theme.of(context).colorScheme.primary;
+
+    return Semantics(
+      link: true,
+      button: true,
+      child: GestureDetector(
+        onTap: onTap,
+        child: Text(
+          label,
+          style: context.texts.bodySmall?.copyWith(
+            color: accent,
+            fontWeight: FontWeight.w600,
+            decoration: TextDecoration.underline,
+            decorationColor: accent,
+          ),
+        ),
       ),
     );
   }

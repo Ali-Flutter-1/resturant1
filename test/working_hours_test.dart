@@ -312,5 +312,29 @@ void main() {
       );
       expect(button.onPressed, isNull);
     });
+    group('where the unsaved-change actions live', () {
+      testWidgets('discard sits beside save, not up in the app bar', (
+        tester,
+      ) async {
+        await tester.pumpWidget(wrap());
+        await tester.pumpAndSettle();
+
+        // Nothing pending: neither action is offered.
+        expect(find.text('Discard'), findsNothing);
+        expect(find.text('Save the week'), findsNothing);
+
+        await tester.tap(find.byType(Switch).first);
+        await tester.pumpAndSettle();
+
+        // Both halves of the same decision, in the same place -- the app bar is
+        // the other end of the screen from the thumb that just changed a day.
+        final discard = tester.getRect(find.text('Discard'));
+        final save = tester.getRect(find.text('Save the week'));
+        expect(discard.center.dy, closeTo(save.center.dy, 8));
+
+        // And discard is the left, quieter one, so the thumb lands on save.
+        expect(discard.center.dx, lessThan(save.center.dx));
+      });
+    });
   });
 }

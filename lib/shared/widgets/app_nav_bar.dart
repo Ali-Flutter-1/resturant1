@@ -282,7 +282,17 @@ class _NavButtonState extends State<_NavButton> {
                   ),
                   decoration: BoxDecoration(
                     // Fades in with everything else rather than switching on.
-                    color: surfaces.accentContainer.withValues(alpha: t),
+                    //
+                    // Scaled, not replaced. `withValues(alpha: t)` overwrites
+                    // the channel, and the dark palette's container is a 13%
+                    // crimson wash -- so at t = 1 the pill became *fully
+                    // opaque* crimson, which is the same colour the label is
+                    // drawn in. The selected tab's name vanished into its own
+                    // background, in dark mode only, because the light
+                    // container happens to be opaque already.
+                    color: surfaces.accentContainer.withValues(
+                      alpha: surfaces.accentContainer.a * t,
+                    ),
                     borderRadius: BorderRadius.circular(
                       AppNavBar._pillHeight / 2,
                     ),

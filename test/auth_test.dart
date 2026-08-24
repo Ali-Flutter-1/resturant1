@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:practice/features/legal/presentation/legal_screen.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:practice/features/cart/cart_cubit.dart';
@@ -548,6 +549,80 @@ void main() {
       expect(cart.state.lines, isEmpty);
       await cart.close();
       await auth.close();
+    });
+  });
+
+  group('what creating an account signs you up to', () {
+    Widget wrapRegister() => MaterialApp(
+      theme: AppTheme.light,
+      home: BlocProvider(
+        create: (_) => AuthCubit(repository: FakeAuthRepository()),
+        child: const RegisterScreen(),
+      ),
+    );
+
+    testWidgets('both documents are one tap from the button', (tester) async {
+      await tester.pumpWidget(wrapRegister());
+      await tester.pumpAndSettle();
+
+      // Below the fold on a test surface, and a list only builds what it
+      // shows. Dragged on the page's own list -- each text field is a
+      // Scrollable too, so asking for "the" scrollable is ambiguous here.
+      await tester.drag(find.text('Create Account'), const Offset(0, -400));
+      await tester.pumpAndSettle();
+      expect(
+        find.textContaining('By creating an account you agree'),
+        findsOneWidget,
+      );
+
+      // Openable, and readable in the app -- somebody deciding whether to sign
+      // up should not need a working connection to read what they are agreeing
+      // to.
+      // Asserted on each document's first heading, which is on screen the
+      // moment it opens.
+      for (final (link, heading) in [
+        ('Terms and Conditions', 'Who we are'),
+        ('Privacy Policy', 'What we collect'),
+      ]) {
+        await tester.ensureVisible(find.text(link));
+        await tester.pumpAndSettle();
+        await tester.tap(find.text(link));
+        await tester.pumpAndSettle();
+
+        expect(find.text(heading), findsOneWidget);
+
+        await tester.pageBack();
+        await tester.pumpAndSettle();
+      }
+    });
+
+    testWidgets('the policy describes what the app really does', (
+      tester,
+    ) async {
+      await tester.pumpWidget(
+        MaterialApp(
+          // `context.surfaces` is a theme extension: without the app's theme
+          // it is null and the screen throws on build.
+          theme: AppTheme.light,
+          home: const LegalScreen(document: LegalDocument.privacy),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      // Two claims worth pinning, because both would become false if the app
+      // changed and nobody thought to reread this: the map hands coordinates
+      // to the phone's own maps app, and cards never touch our systems.
+      for (final claim in [
+        'We do not track your location',
+        'never see your card details',
+      ]) {
+        await tester.dragUntilVisible(
+          find.textContaining(claim),
+          find.byType(ListView),
+          const Offset(0, -200),
+        );
+        expect(find.textContaining(claim), findsOne);
+      }
     });
   });
 }

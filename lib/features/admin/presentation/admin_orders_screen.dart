@@ -549,6 +549,22 @@ class _OrderDetail extends StatefulWidget {
 }
 
 class _OrderDetailState extends State<_OrderDetail> {
+  /// The last ticket this sheet actually rendered.
+  ///
+  /// Closing the sheet clears `detail` while the dismiss animation is still
+  /// running, and the sheet would fall back to its spinner -- which, being a
+  /// [Center], expands to whatever height it is offered. So the sheet grew as
+  /// it slid away. Holding the last ticket means there is always something to
+  /// draw, and the sheet keeps the size it had.
+  AdminOrder? _last;
+
+  @override
+  void initState() {
+    super.initState();
+    final detail = context.read<AdminOrdersCubit>().state.detail;
+    if (detail?.id == widget.id) _last = detail;
+  }
+
   Future<void> _change(OrderStatus next) async {
     // Rejecting or cancelling asks for a reason, which the API stores as the
     // cancellation reason — the customer is told, so it should not be blank.
@@ -577,15 +593,18 @@ class _OrderDetailState extends State<_OrderDetail> {
 
   @override
   Widget build(BuildContext context) {
-    return BlocBuilder<AdminOrdersCubit, AdminOrdersState>(
+    return BlocConsumer<AdminOrdersCubit, AdminOrdersState>(
+      listenWhen: (_, state) => state.detail?.id == widget.id,
+      listener: (_, state) => _last = state.detail,
       builder: (context, state) {
         // Read from `detail`, never from the list. The 20-second poll replaces
         // `orders` wholesale, and an order the current filter no longer returns
         // used to disappear from under the reader mid-sentence.
-        final order = state.detail?.id == widget.id ? state.detail : null;
+        final order = state.detail?.id == widget.id ? state.detail : _last;
         if (order == null) {
-          return const Padding(
-            padding: EdgeInsets.all(AppSpacing.x8),
+          // Bounded on purpose: an unbounded `Center` takes the whole sheet.
+          return const SizedBox(
+            height: 160,
             child: Center(child: CircularProgressIndicator()),
           );
         }

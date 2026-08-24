@@ -37,15 +37,34 @@ void main() {
     });
 
     test('the venue is the destination, not the subject of a search', () {
+      final apple = RestaurantLocation.directionsUrl(isApple: true);
+
       // `daddr` / `destination` mean "route me there". A plain `q=` search is
-      // what produced a map centred on the user with nowhere to go.
+      // what produced a map centred on the user with nowhere to go -- Apple
+      // Maps runs the search and ignores the rest, so `q` must not be here at
+      // all, not even as a label for the pin.
+      expect(apple.queryParameters, contains('daddr'));
+      expect(apple.queryParameters, isNot(contains('q')));
+
+      // And the mode is what opens the route rather than a map with a pin on
+      // it, which is the difference between "directions" and "here it is".
+      expect(apple.queryParameters['dirflg'], 'd');
+
+      final google = RestaurantLocation.directionsUrl(isApple: false);
+      expect(google.path, contains('/dir/'));
+      expect(google.queryParameters['travelmode'], 'driving');
+    });
+
+    test('the origin is left out, so it is wherever the customer is', () {
+      // Naming an origin would route from an address they are not standing at.
+      // Both apps read a missing origin as "current location".
       expect(
         RestaurantLocation.directionsUrl(isApple: true).queryParameters,
-        contains('daddr'),
+        isNot(contains('saddr')),
       );
       expect(
-        RestaurantLocation.directionsUrl(isApple: false).path,
-        contains('/dir/'),
+        RestaurantLocation.directionsUrl(isApple: false).queryParameters,
+        isNot(contains('origin')),
       );
     });
 
