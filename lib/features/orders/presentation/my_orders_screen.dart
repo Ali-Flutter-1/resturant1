@@ -15,7 +15,6 @@ import '../../../shared/widgets/app_sheet.dart';
 import '../../../shared/widgets/app_surface.dart';
 import '../../../shared/widgets/skeleton.dart';
 import '../domain/customer_order.dart';
-import '../domain/order_repository.dart';
 import 'order_status_palette.dart';
 import '../../../shared/widgets/cart_icon_button.dart';
 import '../../cart/cart_cubit.dart';
@@ -43,13 +42,15 @@ class MyOrdersScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return BlocProvider(
-      create: (context) =>
-          OrdersCubit(repository: context.read<OrderRepository>())..load(),
-      child: _MyOrdersView(
-        onBrowseMenu: onBrowseMenu,
-        onOpenCheckout: onOpenCheckout,
-      ),
+    // The app-level cubit, not a new one. This tab is built once and then kept
+    // alive by the shell, so a cubit created here would never hear about an
+    // order placed on another tab -- which is exactly what happened to a
+    // customer's first order: they had looked at this empty screen before
+    // ordering, so coming back showed "no orders yet" until they pulled to
+    // refresh.
+    return _MyOrdersView(
+      onBrowseMenu: onBrowseMenu,
+      onOpenCheckout: onOpenCheckout,
     );
   }
 }
@@ -71,6 +72,12 @@ class _MyOrdersViewState extends State<_MyOrdersView> {
   @override
   void initState() {
     super.initState();
+    // First look at this tab in this session: ask for the history. Silent when
+    // something is already held, so returning to the tab refreshes underneath
+    // rather than blanking a tracker the customer is watching.
+    final cubit = context.read<OrdersCubit>();
+    cubit.load(silent: cubit.state.orders.isNotEmpty);
+
     // A live order changes without the user doing anything, and pull-to-refresh
     // is a poor answer to "is it out for delivery yet" — it asks the person
     // watching the screen to keep asking. Polling is silent, so the tracker

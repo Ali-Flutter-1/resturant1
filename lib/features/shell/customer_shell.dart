@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import '../orders/presentation/orders_cubit.dart';
+import 'package:flutter_bloc/flutter_bloc.dart';
 
 import '../../core/animations/page_transitions.dart';
 
@@ -101,6 +103,11 @@ class CustomerShell extends StatelessWidget {
           // Back to the tab root, then over to Orders: the order now exists, and
           // the tracker is where the customer wants to be looking at it.
           onPlaceOrder: (_) {
+            // Told, not left to notice. The Orders tab is kept alive by the
+            // shell, so if the customer had already looked at it -- which a
+            // first-time customer usually has, finding it empty -- its list is
+            // still the one from before they ordered.
+            context.read<OrdersCubit>().load(silent: true);
             Navigator.of(context).popUntil((r) => r.isFirst);
             TabbedShell.selectTab(context, 2);
           },

@@ -48,6 +48,7 @@ import 'features/auth/auth_cubit.dart';
 import 'features/auth/login_screen.dart';
 import 'features/cart/cart_cubit.dart';
 import 'features/delivery/data/api_admin_delivery_zone_repository.dart';
+import 'features/orders/presentation/orders_cubit.dart';
 import 'features/delivery/data/api_delivery_zone_repository.dart';
 import 'features/delivery/domain/delivery_zone_repository.dart';
 import 'features/shell/admin_shell.dart';
@@ -109,6 +110,18 @@ Future<void> main() async {
   // checkout screen after it.
   final cart = CartCubit();
 
+  // Demo orders are opt-in through `.env` and off by default — chosen here
+  // rather than inside the repository so nothing downstream can serve invented
+  // orders.
+  final OrderRepository orderRepository = AppConfig.useDemoOrders
+      ? DemoOrderRepository()
+      : ApiOrderRepository(client: client);
+
+  // App-level, like the basket and the inbox, and for the same reason: the
+  // Orders tab is built once and kept alive, so an order placed on another tab
+  // has to be able to reach it. A cubit owned by that tab never hears.
+  final orderHistory = OrdersCubit(repository: orderRepository);
+
   // A push that arrives while the app is open moves the badge without the user
   // opening anything.
   pushes.received.listen((_) => inbox.refreshBadge());
@@ -135,6 +148,8 @@ Future<void> main() async {
   auth.onSigningOut = () async {
     inbox.clear();
     cart.clear();
+    // Somebody else's receipts carry their address and phone number.
+    orderHistory.clear();
     await pushes.unregister();
   };
 
@@ -165,9 +180,8 @@ Future<void> main() async {
       inbox: inbox,
       cart: cart,
       workingHours: ApiWorkingHoursRepository(client: client),
-      orders: AppConfig.useDemoOrders
-          ? DemoOrderRepository()
-          : ApiOrderRepository(client: client),
+      orders: orderRepository,
+      orderHistory: orderHistory,
       // Delivery pricing is zone-based and lives entirely on the server: the
       // admin redraws areas and changes fees without an app release.
       deliveryZones: ApiDeliveryZoneRepository(client: client),
@@ -194,6 +208,7 @@ class TsCafeApp extends StatelessWidget {
     required this.inbox,
     required this.workingHours,
     required this.orders,
+    required this.orderHistory,
     required this.deliveryZones,
     required this.adminDeliveryZones,
   });
@@ -254,6 +269,9 @@ class TsCafeApp extends StatelessWidget {
   /// The signed-in customer's orders. Scoped to the bearer token, so it needs
   /// nothing from the session beyond the client it already shares.
   final OrderRepository orders;
+
+  /// Held by the app so checkout can refresh it and sign-out can empty it.
+  final OrdersCubit orderHistory;
   final DeliveryZoneRepository deliveryZones;
   final AdminDeliveryZoneRepository adminDeliveryZones;
 
@@ -283,6 +301,7 @@ class TsCafeApp extends StatelessWidget {
           BlocProvider.value(value: auth),
           BlocProvider.value(value: cart),
           BlocProvider.value(value: inbox),
+          BlocProvider.value(value: orderHistory),
         ],
         child: ScreenUtilInit(
           designSize: const Size(AppLayout.designWidth, AppLayout.designHeight),

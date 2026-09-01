@@ -81,6 +81,13 @@ class OrdersCubit extends Cubit<OrdersState> {
   final OrderRepository _repository;
   final PaymentFlow _payments;
 
+  /// Drops everything on sign-out.
+  ///
+  /// Order history belongs to one account. Leaving it in place means the next
+  /// person to sign in on this phone sees somebody else's orders -- with their
+  /// address and phone number on the receipt -- until the first refresh lands.
+  void clear() => emit(const OrdersState(status: OrdersStatus.ready));
+
   /// Loads, or reloads after a failure.
   ///
   /// [silent] keeps the current list on screen while refetching, so

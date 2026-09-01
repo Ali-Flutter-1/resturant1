@@ -274,9 +274,14 @@ void main() {
     Widget wrap(OrderRepository repository) =>
         RepositoryProvider<OrderRepository>.value(
           value: repository,
-          child: MaterialApp(
-            theme: AppTheme.light,
-            home: const MyOrdersScreen(),
+          // The cubit is app-level now, so an order placed on another tab can
+          // reach this screen. Tests provide it the same way main() does.
+          child: BlocProvider(
+            create: (_) => OrdersCubit(repository: repository),
+            child: MaterialApp(
+              theme: AppTheme.light,
+              home: const MyOrdersScreen(),
+            ),
           ),
         );
 
@@ -755,11 +760,61 @@ void main() {
       expect(repository.loadCount, greaterThan(whileVisible));
     });
   });
+
+  group("a customer's first order", () {
+    test('appears the moment checkout says it was placed', () async {
+      final repository = FakeOrderRepository(orders: const []);
+      final orders = OrdersCubit(repository: repository);
+
+      // The customer looks at Orders before ordering anything, which is what a
+      // first-time customer does -- and finds it empty.
+      await orders.load();
+      expect(orders.state.isEmpty, isTrue);
+
+      // They place an order from the Menu tab. The Orders tab is still alive
+      // and still holding the empty list it loaded a minute ago.
+      await repository.place(
+        idempotencyKey: 'key-1',
+        isDelivery: false,
+        lines: const [],
+        contactName: 'Ali',
+        contactPhone: '07700 900123',
+      );
+      expect(orders.state.orders, isEmpty);
+
+      // Checkout tells it. Silently, so nothing blanks on the way in.
+      await orders.load(silent: true);
+
+      expect(orders.state.orders, hasLength(1));
+      expect(orders.state.live, hasLength(1));
+      expect(orders.state.isEmpty, isFalse);
+      await orders.close();
+    });
+
+    test('signing out takes the history with it', () async {
+      final repository = FakeOrderRepository(
+        orders: [OrderFixtures.order(id: '1', reference: '#0041')],
+      );
+      final orders = OrdersCubit(repository: repository);
+      await orders.load();
+      expect(orders.state.orders, hasLength(1));
+
+      orders.clear();
+
+      // A receipt carries an address and a phone number. The next person to
+      // sign in on this phone must not find somebody else's.
+      expect(orders.state.orders, isEmpty);
+      await orders.close();
+    });
+  });
 }
 
 /// The orders screen with a repository in scope.
 Widget _wrapOrders(OrderRepository repository) =>
     RepositoryProvider<OrderRepository>.value(
       value: repository,
-      child: MaterialApp(theme: AppTheme.light, home: const MyOrdersScreen()),
+      child: BlocProvider(
+        create: (_) => OrdersCubit(repository: repository),
+        child: MaterialApp(theme: AppTheme.light, home: const MyOrdersScreen()),
+      ),
     );
