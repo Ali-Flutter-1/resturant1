@@ -625,4 +625,47 @@ void main() {
       }
     });
   });
+
+  group('signing out lets go of the device first', () {
+    test('the session is forgotten before anything is sent', () async {
+      final repository = FakeAuthRepository();
+      final cubit = AuthCubit(repository: repository);
+      await cubit.signIn(email: 'ali@example.com', password: 'password1');
+
+      final order = <String>[];
+      cubit.onSigningOut = () async => order.add('unregister');
+
+      await cubit.signOut();
+
+      // Clearing last left a window as long as two round trips on a bad
+      // connection: restarting the app inside it signed the same person
+      // straight back in, and a fresh sign-in had its tokens wiped when the
+      // old logout finally finished. Both read as "sign out did not work, but
+      // it works if you wait".
+      expect(repository.forgetCalls, 1);
+      expect(repository.storedRefreshToken, isNull);
+      expect(cubit.state.isSignedIn, isFalse);
+
+      // ...and the revoke still happens, with the token that was dropped.
+      expect(repository.logoutCalls, 1);
+      expect(repository.lastRevokedToken, 'refresh-token');
+      await cubit.close();
+    });
+
+    test('a refused revoke still leaves the device signed out', () async {
+      final repository = FakeAuthRepository();
+      final cubit = AuthCubit(repository: repository);
+      await cubit.signIn(email: 'ali@example.com', password: 'password1');
+
+      cubit.onSigningOut = () async => throw StateError('no network');
+
+      await cubit.signOut();
+
+      // Leaving somebody signed in for the sake of tidy bookkeeping is the
+      // worse failure.
+      expect(cubit.state.isSignedIn, isFalse);
+      expect(repository.storedRefreshToken, isNull);
+      await cubit.close();
+    });
+  });
 }

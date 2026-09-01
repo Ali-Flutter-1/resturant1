@@ -3,7 +3,6 @@ import '../orders/presentation/orders_cubit.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 
 import '../../core/animations/page_transitions.dart';
-import '../../core/theme/app_spacing.dart';
 
 import '../menu/domain/dish.dart';
 import '../notifications/domain/app_notification.dart';
@@ -209,14 +208,13 @@ class CustomerShell extends StatelessWidget {
               toContinue: 'to open your account',
               // A guest can still reach the restaurant without an account --
               // the address, the hours and the contact form are public, and
-              // hiding them behind a sign-in would be absurd.
-              extra: TextButton(
-                onPressed: () => Navigator.of(context).push(
-                  AppPageRoute<void>(
-                    builder: (_) => const AboutContactScreen(),
-                  ),
-                ),
-                child: const Text('About & contact'),
+              // hiding them behind a sign-in would be absurd. Offered as a
+              // proper row in the invitation rather than a stray link left
+              // floating at the foot of the screen.
+              extraLabel: 'About & contact',
+              extraIcon: Icons.storefront_outlined,
+              onExtra: () => Navigator.of(context).push(
+                AppPageRoute<void>(builder: (_) => const AboutContactScreen()),
               ),
               child: ProfileScreen(
                 // About-and-contact is pushed rather than being the tab itself:
@@ -251,7 +249,9 @@ class _GuestGate extends StatelessWidget {
     required this.body,
     required this.toContinue,
     required this.child,
-    this.extra,
+    this.extraLabel,
+    this.extraIcon,
+    this.onExtra,
   });
 
   final IconData icon;
@@ -260,8 +260,11 @@ class _GuestGate extends StatelessWidget {
   final String toContinue;
   final Widget child;
 
-  /// Anything still worth offering without an account.
-  final Widget? extra;
+  /// Something still worth offering without an account, shown under the
+  /// invitation as a row rather than as a loose link.
+  final String? extraLabel;
+  final IconData? extraIcon;
+  final VoidCallback? onExtra;
 
   @override
   Widget build(BuildContext context) {
@@ -269,20 +272,14 @@ class _GuestGate extends StatelessWidget {
     if (signedIn) return child;
 
     return Scaffold(
-      body: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          Flexible(
-            child: SignedOutPanel(
-              icon: icon,
-              title: title,
-              body: body,
-              toContinue: toContinue,
-            ),
-          ),
-          ?extra,
-          const SizedBox(height: AppSpacing.x8),
-        ],
+      body: SignedOutPanel(
+        icon: icon,
+        title: title,
+        body: body,
+        toContinue: toContinue,
+        extraLabel: extraLabel,
+        extraIcon: extraIcon,
+        onExtra: onExtra,
       ),
     );
   }

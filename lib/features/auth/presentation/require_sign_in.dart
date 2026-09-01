@@ -46,25 +46,39 @@ Future<bool> requireSignIn(
 /// Closing on the *state* rather than on the button's callback is deliberate:
 /// the session can arrive from sign-in, from registering, or from finishing a
 /// password reset, and all three should land the customer back where they were.
-class _SignInGate extends StatelessWidget {
+class _SignInGate extends StatefulWidget {
   const _SignInGate({this.toContinue});
 
   final String? toContinue;
 
   @override
+  State<_SignInGate> createState() => _SignInGateState();
+}
+
+class _SignInGateState extends State<_SignInGate> {
+  @override
   Widget build(BuildContext context) {
+    // This gate's own route, captured so the listener can close *it* rather
+    // than whatever happens to be on top.
+    final gate = ModalRoute.of(context);
+
     return BlocListener<AuthCubit, AuthState>(
       listenWhen: (was, now) => !was.isSignedIn && now.isSignedIn,
       listener: (context, _) {
-        // Back to whatever asked. Popping to the gate's own route rather than
-        // to the root, because a registration flow may have pushed screens of
-        // its own on top.
-        Navigator.of(context).pop();
+        final navigator = Navigator.of(context);
+        // Everything the gate opened goes with it. Registering pushes the
+        // sign-up screen on top, so a plain `pop()` closed *that* and left the
+        // gate showing a login form to somebody who had just been signed in --
+        // which then did nothing when they typed their new password, because
+        // there was no signed-out-to-signed-in change left to listen for.
+        if (gate != null) navigator.popUntil((route) => route == gate);
+        navigator.pop();
       },
       child: Scaffold(
         body: Column(
           children: [
-            if (toContinue != null) _WhyBanner(toContinue: toContinue!),
+            if (widget.toContinue != null)
+              _WhyBanner(toContinue: widget.toContinue!),
             Expanded(
               child: LoginScreen(onBack: () => Navigator.of(context).pop()),
             ),
@@ -124,6 +138,9 @@ class SignedOutPanel extends StatelessWidget {
     required this.body,
     required this.toContinue,
     this.onSignedIn,
+    this.extraLabel,
+    this.extraIcon,
+    this.onExtra,
   });
 
   final IconData icon;
@@ -135,6 +152,11 @@ class SignedOutPanel extends StatelessWidget {
 
   /// Called once a session exists, for a screen that needs to load itself.
   final VoidCallback? onSignedIn;
+
+  /// A second, quieter offer for something that needs no account at all.
+  final String? extraLabel;
+  final IconData? extraIcon;
+  final VoidCallback? onExtra;
 
   @override
   Widget build(BuildContext context) {
@@ -171,6 +193,20 @@ class SignedOutPanel extends StatelessWidget {
                 if (signedIn) onSignedIn?.call();
               },
             ),
+            // Part of the invitation, under the button it belongs with --
+            // rather than a stray link at the foot of the screen with nothing
+            // around it to say what it is.
+            if (onExtra != null) ...[
+              const SizedBox(height: AppSpacing.x3),
+              TextButton.icon(
+                onPressed: onExtra,
+                icon: Icon(
+                  extraIcon ?? Icons.open_in_new,
+                  size: AppIconSize.md,
+                ),
+                label: Text(extraLabel ?? 'More'),
+              ),
+            ],
           ],
         ),
       ),

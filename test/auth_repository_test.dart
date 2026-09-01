@@ -153,7 +153,7 @@ void main() {
     expect(user.role, UserRole.staff);
   });
 
-  test('logout clears the local token even when the call fails', () async {
+  test('signing out forgets the session before any request', () async {
     final tokens = _MemoryTokens()
       ..access = 'a1'
       ..refresh = 'r1';
@@ -162,12 +162,18 @@ void main() {
       tokens: tokens,
     );
 
-    // Must not throw: the user asked to sign out, and a server problem cannot
-    // be allowed to leave them apparently signed in.
-    await built.repo.logout();
-
+    // The device forgets first and revokes second. Clearing after the round
+    // trip left a window -- as long as the timeout on a bad connection -- in
+    // which restarting the app signed the same person straight back in, and a
+    // fresh sign-in had its tokens wiped by the old logout finishing.
+    final revoked = await built.repo.forgetSession();
+    expect(revoked, 'r1');
     expect(tokens.refresh, isNull);
     expect(tokens.clearCalls, 1);
+
+    // And the revoke itself must not throw: the user asked to sign out, and a
+    // server problem cannot be allowed to leave them apparently signed in.
+    await built.repo.logout(refreshToken: revoked);
   });
 
   test('changing the password adopts the new token pair', () async {
@@ -248,18 +254,30 @@ void main() {
       expect(sent['new_password'], 'newpass1');
     });
 
-    test('logout succeeds and still clears the session', () async {
+    test('logout revokes the token it was handed', () async {
       final tokens = _MemoryTokens()
         ..access = 'a1'
         ..refresh = 'r1';
       final built = build((_) async => _json(200, nullData), tokens: tokens);
 
-      await built.repo.logout();
+      final revoked = await built.repo.forgetSession();
+      await built.repo.logout(refreshToken: revoked);
 
+      // The store is already empty by now, so the token has to travel with the
+      // call rather than be read back out of it.
       final sent = built.adapter.bodies['/auth/logout'] as Map;
       expect(sent['refresh_token'], 'r1');
-      expect(built.tokens.clearCalls, 1);
       expect(built.tokens.refresh, isNull);
+    });
+
+    test('nothing to revoke means no request at all', () async {
+      final built = build((_) async => _json(200, nullData));
+
+      await built.repo.logout();
+
+      // A session that was never there, or one already forgotten: posting a
+      // null token would be a guaranteed 422.
+      expect(built.adapter.bodies.containsKey('/auth/logout'), isFalse);
     });
 
     test('a real forgot-password failure still surfaces', () async {

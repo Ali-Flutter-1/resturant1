@@ -94,7 +94,14 @@ class FakeAuthRepository implements AuthRepository {
   }
 
   @override
-  Future<void> logout() async => logoutCalls++;
+  Future<void> logout({String? refreshToken}) async {
+    logoutCalls++;
+    lastRevokedToken = refreshToken;
+  }
+
+  /// What sign-out handed back for revoking, so a test can prove the device
+  /// forgot the session *before* the network call rather than after it.
+  String? lastRevokedToken;
 
   @override
   Future<void> deleteAccount(String password) async {
@@ -163,7 +170,16 @@ class FakeAuthRepository implements AuthRepository {
   int forgetCalls = 0;
 
   @override
-  Future<void> forgetSession() async => forgetCalls++;
+  Future<String?> forgetSession() async {
+    forgetCalls++;
+    final token = storedRefreshToken;
+    storedRefreshToken = null;
+    storedSession = false;
+    return token;
+  }
+
+  /// Stands in for the keychain: cleared the moment the session is forgotten.
+  String? storedRefreshToken = 'refresh-token';
 
   @override
   Future<void> resetPassword({

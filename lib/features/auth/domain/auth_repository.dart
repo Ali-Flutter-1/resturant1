@@ -31,7 +31,9 @@ abstract interface class AuthRepository {
 
   Future<AuthUser> currentUser();
 
-  Future<void> logout();
+  /// Revokes [refreshToken] server-side. Best effort: the device has already
+  /// forgotten the session by the time this runs.
+  Future<void> logout({String? refreshToken});
 
   /// Closes the account for good and signs this device out.
   ///
@@ -76,11 +78,16 @@ abstract interface class AuthRepository {
     required String newPassword,
   });
 
-  /// Forgets this device's tokens without calling the server.
+  /// Forgets this device's tokens without calling the server, and hands back
+  /// the refresh token it dropped.
   ///
-  /// For after a password reset: the refresh token has already been revoked, so
-  /// `logout` would be a request that cannot succeed. The session is simply gone.
-  Future<void> forgetSession();
+  /// Two callers, one behaviour. After a password reset the token has already
+  /// been revoked, so there is nothing to do with it. On sign-out the caller
+  /// revokes it afterwards -- the point being that the device forgets *first*:
+  /// until the tokens are gone the person is still signed in as far as this
+  /// phone is concerned, and a slow round trip leaves a window in which
+  /// restarting the app signs them straight back in.
+  Future<String?> forgetSession();
 
   Future<void> changePassword({
     required String currentPassword,

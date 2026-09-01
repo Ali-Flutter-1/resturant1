@@ -114,22 +114,23 @@ class ApiAuthRepository implements AuthRepository {
   /// must still sign the user out of this device — leaving them apparently
   /// signed in because the network hiccuped would be the wrong way to fail.
   @override
-  Future<void> logout() async {
-    final refresh = _tokens.refreshToken;
+  @override
+  Future<void> logout({String? refreshToken}) async {
+    final refresh = refreshToken ?? _tokens.refreshToken;
+    if (refresh == null) return;
+
     try {
-      if (refresh != null) {
-        // `send`, not `object`: this route answers `{success, message, data:
-        // null}`, and asking for an object would throw on the null.
-        await _client.send(
-          ApiConstants.logout,
-          method: 'POST',
-          body: {'refresh_token': refresh},
-        );
-      }
+      // `send`, not `object`: this route answers `{success, message, data:
+      // null}`, and asking for an object would throw on the null.
+      await _client.send(
+        ApiConstants.logout,
+        method: 'POST',
+        body: {'refresh_token': refresh},
+      );
     } on ApiFailure {
-      // Deliberately ignored; see above.
-    } finally {
-      await _tokens.clear();
+      // Deliberately ignored: the device has already forgotten the session, so
+      // a failed revoke leaves a token that expires on its own rather than
+      // somebody apparently still signed in.
     }
   }
 
@@ -199,7 +200,11 @@ class ApiAuthRepository implements AuthRepository {
   }
 
   @override
-  Future<void> forgetSession() => _tokens.clear();
+  Future<String?> forgetSession() async {
+    final refresh = _tokens.refreshToken;
+    await _tokens.clear();
+    return refresh;
+  }
 
   @override
   Future<void> resetPassword({

@@ -4,6 +4,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:practice/core/theme/app_theme.dart';
 import 'package:practice/features/auth/auth_cubit.dart';
 import 'package:practice/features/auth/login_screen.dart';
+import 'package:practice/features/auth/register_screen.dart';
 import 'package:practice/features/auth/presentation/require_sign_in.dart';
 import 'package:practice/features/shell/customer_shell.dart';
 
@@ -173,6 +174,40 @@ void main() {
       expect(find.byType(LoginScreen), findsNothing);
       // ...and the thing they were trying to do happens, rather than dumping
       // them back at the beginning.
+      expect(find.text('carried on'), findsOne);
+      await auth.close();
+    });
+
+    testWidgets('registering closes the gate, not just the sign-up screen', (
+      tester,
+    ) async {
+      final auth = AuthCubit(repository: FakeAuthRepository());
+      await tester.pumpWidget(host(auth));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.text('place order'));
+      await tester.pumpAndSettle();
+
+      // Off to create an account, which pushes on top of the gate.
+      await tester.tap(find.text('Create an account'));
+      await tester.pumpAndSettle();
+      expect(find.byType(RegisterScreen), findsOne);
+
+      await auth.register(
+        firstName: 'Ali',
+        lastName: 'Hassan',
+        email: 'ali@example.com',
+        password: 'password1',
+      );
+      await tester.pumpAndSettle();
+
+      // Popping the top route closed the *sign-up* screen and left the gate
+      // showing a login form to somebody who had just been signed in -- which
+      // then did nothing when they typed their password, because there was no
+      // signed-out-to-signed-in change left to listen for. Going back was the
+      // only way out, and it revealed they had been signed in all along.
+      expect(find.byType(RegisterScreen), findsNothing);
+      expect(find.byType(LoginScreen), findsNothing);
       expect(find.text('carried on'), findsOne);
       await auth.close();
     });

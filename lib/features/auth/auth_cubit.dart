@@ -240,6 +240,15 @@ class AuthCubit extends Cubit<AuthState> {
     // spinner to do it.
     emit(const AuthState(hasRestored: true));
 
+    // Then the device forgets the session, before any network call rather than
+    // after them. Clearing last left a window — as long as two round trips on
+    // a bad connection — in which the tokens and the cached profile were still
+    // on the phone, so restarting the app signed the same person straight back
+    // in, and a *new* sign-in during that window had its tokens wiped by the
+    // old logout finishing. Both looked like "signing out did not work, but it
+    // works if you wait".
+    final refreshToken = await _repository?.forgetSession();
+
     // Then the device is de-registered, and only then the logout call. The
     // order is what matters: it is `logout` that invalidates the access token,
     // and removing this installation needs a valid one. Skip it and the next
@@ -251,7 +260,9 @@ class AuthCubit extends Cubit<AuthState> {
       // tidy bookkeeping is the worse failure, and the removal is idempotent —
       // the next sign-in on this device transfers the registration anyway.
     }
-    await _repository?.logout();
+    // Best effort, and last: the session is already gone from this device, so
+    // a refusal here costs nothing but a token that will expire on its own.
+    await _repository?.logout(refreshToken: refreshToken);
   }
 
   /// Closes the account.
