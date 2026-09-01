@@ -6,6 +6,7 @@ import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:practice/core/network/api_client.dart';
+import 'package:practice/features/contact/data/api_contact_repository.dart';
 import 'package:practice/features/orders/data/api_order_repository.dart';
 import 'package:practice/features/orders/domain/customer_order.dart';
 import 'package:practice/core/network/api_failure.dart';
@@ -651,5 +652,91 @@ void main() {
         isNot(contains('postcode')),
       );
     });
+  });
+
+  group('the contact form on the wire', () {
+    Future<ResponseBody> ok(RequestOptions _) async =>
+        _json(200, '{"success":true,"message":"Thanks.","data":null}');
+
+    ApiContactRepository contactWith(_StubAdapter adapter) =>
+        ApiContactRepository(
+          client: _client(handler: ok, adapter: adapter),
+        );
+
+    test('normalises the email and trims everything', () async {
+      final adapter = _StubAdapter(ok);
+
+      await contactWith(adapter).send(
+        name: '  Ali Hassan ',
+        email: '  Ali@Example.COM ',
+        message: '  Do you cater? ',
+      );
+
+      final body = adapter.calls.single.data as Map;
+      // The address is an identifier as far as the restaurant is concerned, so
+      // it is stored one way rather than however it was typed.
+      expect(body['email'], 'ali@example.com');
+      expect(body['name'], 'Ali Hassan');
+      expect(body['message'], 'Do you cater?');
+    });
+
+    test('blank optional fields are omitted, not sent empty', () async {
+      final adapter = _StubAdapter(ok);
+
+      await contactWith(adapter).send(
+        name: 'Ali',
+        email: 'ali@example.com',
+        message: 'Hello',
+        phone: '   ',
+        subject: '',
+      );
+
+      // An empty string is a value: the API would store a subject of "" and
+      // the admin inbox would show a message headed by nothing at all.
+      final body = adapter.calls.single.data as Map;
+      expect(body.keys, isNot(contains('phone')));
+      expect(body.keys, isNot(contains('subject')));
+    });
+
+    test('optional fields are sent when given', () async {
+      final adapter = _StubAdapter(ok);
+
+      await contactWith(adapter).send(
+        name: 'Ali',
+        email: 'ali@example.com',
+        message: 'Hello',
+        phone: ' 07700 900123 ',
+        subject: ' Catering ',
+      );
+
+      final body = adapter.calls.single.data as Map;
+      expect(body['phone'], '07700 900123');
+      expect(body['subject'], 'Catering');
+    });
+
+    test('a null data payload is a success, not a parse failure', () async {
+      // The route answers `{success, message, data: null}`. Asking for an
+      // object would throw on the null even though the message arrived, and
+      // the customer would be told their message failed after it was sent.
+      await expectLater(
+        contactWith(
+          _StubAdapter(ok),
+        ).send(name: 'Ali', email: 'ali@example.com', message: 'Hello'),
+        completes,
+      );
+    });
+
+    test(
+      'needs no session: it is who cannot sign in that most needs it',
+      () async {
+        final adapter = _StubAdapter(ok);
+        await contactWith(
+          adapter,
+        ).send(name: 'Ali', email: 'ali@example.com', message: 'Hello');
+
+        // No tokens in this client, and the call still goes through.
+        expect(adapter.calls.single.headers, isNot(contains('Authorization')));
+      },
+    );
   });
 }

@@ -41,11 +41,9 @@ import 'features/menu/domain/menu_repository.dart';
 import 'features/orders/data/api_order_repository.dart';
 import 'features/orders/data/demo_order_repository.dart';
 import 'features/orders/domain/order_repository.dart';
-import 'core/animations/page_transitions.dart';
 import 'core/theme/app_spacing.dart';
 import 'core/theme/app_theme.dart';
 import 'features/auth/auth_cubit.dart';
-import 'features/auth/login_screen.dart';
 import 'features/cart/cart_cubit.dart';
 import 'features/delivery/data/api_admin_delivery_zone_repository.dart';
 import 'features/orders/presentation/orders_cubit.dart';
@@ -389,13 +387,19 @@ class _SplashGateState extends State<SplashGate> {
         final waiting = !_elapsed || !state.hasRestored;
 
         final child = switch (waiting ? null : state.role) {
+          // A guest and a signed-in customer get the *same* widget, which
+          // matters more than it looks: signing in mid-task must not rebuild
+          // the shell, or the checkout screen the customer was sent to sign in
+          // from would be thrown away underneath them. `SessionWatcher` does
+          // nothing without a session, so it is safe for both.
+          null when !waiting => const SessionWatcher(child: CustomerShell()),
           UserRole.customer => const SessionWatcher(child: CustomerShell()),
           // Staff share the admin shell. What they may do inside it is narrower
           // — see `UserRole.canManageVenue` — but the shape of their app is the
           // staff-facing one, not the customer's.
           UserRole.staff ||
           UserRole.admin => const SessionWatcher(child: AdminShell()),
-          null => waiting ? const WelcomeScreen() : const _SignedOutFlow(),
+          null => const WelcomeScreen(),
         };
 
         return AnimatedSwitcher(
@@ -404,7 +408,16 @@ class _SplashGateState extends State<SplashGate> {
             // Keyed on what is showing, not on the role alone: splash and
             // sign-in are both role-null, and without this the cross-fade
             // between them would not happen.
-            key: ValueKey(waiting ? 'splash' : state.role),
+            // Keyed on which *shell* is showing, not on the role: a guest and
+            // a customer share one, so signing in keeps the tabs and anything
+            // pushed on top of them rather than starting over.
+            key: ValueKey(
+              waiting
+                  ? 'splash'
+                  : (state.role?.usesAdminShell ?? false)
+                  ? 'admin'
+                  : 'customer',
+            ),
             child: child,
           ),
         );
@@ -466,24 +479,4 @@ class _SessionWatcherState extends State<SessionWatcher> {
 
   @override
   Widget build(BuildContext context) => widget.child;
-}
-
-/// Sign-in on its own navigator, so Register can be pushed and popped without
-/// involving either shell.
-///
-/// Sign-in is the root here rather than a screen pushed over Welcome: the
-/// splash is not somewhere to go back to, and leaving it on the stack put a
-/// back arrow on sign-in that led nowhere useful.
-class _SignedOutFlow extends StatelessWidget {
-  const _SignedOutFlow();
-
-  @override
-  Widget build(BuildContext context) {
-    return Navigator(
-      onGenerateRoute: (settings) => AppPageRoute<void>(
-        settings: settings,
-        builder: (context) => const LoginScreen(),
-      ),
-    );
-  }
 }

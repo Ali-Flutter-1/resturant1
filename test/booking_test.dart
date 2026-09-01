@@ -498,4 +498,103 @@ void main() {
       expect(find.textContaining('phone number'), findsWidgets);
     });
   });
+
+  group('choosing a day and a party', () {
+    test('a new day drops the slot chosen on the old one', () async {
+      final repository = FakeReservationRepository();
+      final cubit = BookingCubit(repository: repository);
+      await cubit.load();
+
+      final slot = cubit.state.availability!.tables.first.sittings.first;
+      cubit.select(slot.slotId);
+      expect(cubit.state.selectedSlotId, isNotNull);
+
+      await cubit.setDate(cubit.state.date.add(const Duration(days: 1)));
+
+      // That sitting belongs to yesterday. Keeping the id would book a table
+      // on a day the customer is no longer looking at.
+      expect(cubit.state.selectedSlotId, isNull);
+      await cubit.close();
+    });
+
+    test('a bigger party keeps the slot and lets the server judge', () async {
+      final repository = FakeReservationRepository();
+      final cubit = BookingCubit(repository: repository);
+      await cubit.load();
+
+      final slot = cubit.state.availability!.tables.first.sittings.first;
+      cubit.select(slot.slotId);
+
+      await cubit.setGuests(cubit.state.guests + 1);
+
+      // Kept on purpose: a bigger party may still fit the same table, and the
+      // reload marks the sitting too small if it does not. Clearing it would
+      // make the customer re-pick a time that is probably still fine.
+      expect(cubit.state.selectedSlotId, slot.slotId);
+      await cubit.close();
+    });
+
+    test('the party size stops at the API ceiling', () async {
+      final cubit = BookingCubit(repository: FakeReservationRepository());
+
+      await cubit.setGuests(500);
+      expect(cubit.state.guests, BookingCubit.maxGuests);
+
+      await cubit.setGuests(0);
+      // Nobody books a table for nought people, and the API refuses it.
+      expect(cubit.state.guests, 1);
+      await cubit.close();
+    });
+
+    test('the same day again is not a reload', () async {
+      final repository = FakeReservationRepository();
+      final cubit = BookingCubit(repository: repository);
+      await cubit.load();
+      final calls = repository.availabilityCalls;
+
+      await cubit.setDate(cubit.state.date);
+
+      // Tapping today when today is already showing should cost nothing.
+      expect(repository.availabilityCalls, calls);
+      await cubit.close();
+    });
+
+    test('tapping the chosen sitting again lets go of it', () async {
+      final cubit = BookingCubit(repository: FakeReservationRepository());
+      await cubit.load();
+
+      final slot = cubit.state.availability!.tables.first.sittings.first;
+      cubit.select(slot.slotId);
+      cubit.select(slot.slotId);
+
+      // Otherwise there is no way to change your mind short of leaving.
+      expect(cubit.state.selectedSlotId, isNull);
+      expect(cubit.state.canSubmit, isFalse);
+      await cubit.close();
+    });
+  });
+
+  group('after a booking is made', () {
+    test('starting again keeps the day and party, not the booking', () async {
+      final repository = FakeReservationRepository();
+      final cubit = BookingCubit(repository: repository);
+      await cubit.load();
+      await cubit.setGuests(4);
+      cubit.select(
+        cubit.state.availability!.tables.first.sittings.first.slotId,
+      );
+      await cubit.submit(contactName: 'Ali', contactPhone: '07700 900123');
+      expect(cubit.state.reservation, isNotNull);
+
+      cubit.startAgain();
+
+      // Booking a second table is usually the same party on the same evening,
+      // so those survive; the booking itself must not, or the screen would
+      // show a confirmation for a table nobody has asked for yet.
+      expect(cubit.state.guests, 4);
+      expect(cubit.state.reservation, isNull);
+      expect(cubit.state.selectedSlotId, isNull);
+      await cubit.close();
+    });
+  });
 }

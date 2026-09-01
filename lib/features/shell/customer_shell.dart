@@ -3,13 +3,16 @@ import '../orders/presentation/orders_cubit.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 
 import '../../core/animations/page_transitions.dart';
+import '../../core/theme/app_spacing.dart';
 
 import '../menu/domain/dish.dart';
 import '../notifications/domain/app_notification.dart';
 import '../notifications/presentation/notification_routing.dart';
 import '../../shared/shell/tabbed_shell.dart';
 import '../about/presentation/about_contact_screen.dart';
+import '../auth/auth_cubit.dart';
 import '../auth/presentation/profile_screen.dart';
+import '../auth/presentation/require_sign_in.dart';
 import '../booking/presentation/book_table_screen.dart';
 import '../booking/presentation/my_bookings_screen.dart';
 import '../checkout/presentation/checkout_screen.dart';
@@ -95,7 +98,19 @@ class CustomerShell extends StatelessWidget {
     );
   }
 
-  static void _openCheckout(BuildContext context) {
+  /// Opens checkout, asking for an account first if there is not one.
+  ///
+  /// The basket is filled by a guest quite happily -- it lives in the app, not
+  /// on the server. This is the point where the order becomes somebody's, so
+  /// this is where the account is asked for, and the basket survives the
+  /// detour: `requireSignIn` returns and checkout opens with everything still
+  /// in it.
+  static Future<void> _openCheckout(BuildContext context) async {
+    if (!await requireSignIn(context, toContinue: 'to place your order')) {
+      return;
+    }
+    if (!context.mounted) return;
+
     Navigator.of(context).push(
       AppPageRoute<void>(
         builder: (context) => CheckoutScreen(
@@ -143,20 +158,41 @@ class CustomerShell extends StatelessWidget {
             sfSymbol: 'calendar',
             icon: Icons.calendar_month_outlined,
             selectedIcon: Icons.calendar_month,
-            builder: (context) =>
-                BookTableScreen(onSeeBookings: () => _openMyBookings(context)),
+            // Gated whole, unlike the menu: the availability endpoint itself
+            // needs a session, so a guest would meet an empty slot list and a
+            // 401 rather than a form they could fill in. The submit path asks
+            // again anyway, for a session that expires while the form is open.
+            builder: (context) => _GuestGate(
+              icon: Icons.calendar_month_outlined,
+              title: 'Book a table',
+              body:
+                  'Sign in to see what is free and reserve a table. It takes '
+                  'a moment.',
+              toContinue: 'to book a table',
+              child: BookTableScreen(
+                onSeeBookings: () => _openMyBookings(context),
+              ),
+            ),
           ),
           ShellTab(
             label: 'Orders',
             sfSymbol: 'list.bullet.rectangle',
             icon: Icons.list_alt_outlined,
             selectedIcon: Icons.list_alt,
-            builder: (context) => MyOrdersScreen(
-              onOpenCheckout: () => _openCheckout(context),
-              // An empty history is a dead end otherwise. The menu is the
-              // Discover tab's root, so this asks the shell to switch tabs
-              // rather than pushing a second copy of it onto this one.
-              onBrowseMenu: () => TabbedShell.selectTab(context, 0),
+            builder: (context) => _GuestGate(
+              icon: Icons.receipt_long_outlined,
+              title: 'Your orders live here',
+              body:
+                  'Sign in to follow an order and to see everything you have '
+                  'ordered before.',
+              toContinue: 'to see your orders',
+              child: MyOrdersScreen(
+                onOpenCheckout: () => _openCheckout(context),
+                // An empty history is a dead end otherwise. The menu is the
+                // Discover tab's root, so this asks the shell to switch tabs
+                // rather than pushing a second copy of it onto this one.
+                onBrowseMenu: () => TabbedShell.selectTab(context, 0),
+              ),
             ),
           ),
           ShellTab(
@@ -164,15 +200,88 @@ class CustomerShell extends StatelessWidget {
             sfSymbol: 'person',
             icon: Icons.person_outline,
             selectedIcon: Icons.person,
-            builder: (context) => ProfileScreen(
-              // About-and-contact is pushed rather than being the tab itself: the
-              // tab is the person's account, and the contact form is one thing
-              // they might want from it.
-              onGetInTouch: () => Navigator.of(context).push(
-                AppPageRoute<void>(builder: (_) => const AboutContactScreen()),
+            builder: (context) => _GuestGate(
+              icon: Icons.person_outline,
+              title: 'Your account',
+              body:
+                  'Sign in to keep your details for next time, follow your '
+                  'orders and manage your bookings.',
+              toContinue: 'to open your account',
+              // A guest can still reach the restaurant without an account --
+              // the address, the hours and the contact form are public, and
+              // hiding them behind a sign-in would be absurd.
+              extra: TextButton(
+                onPressed: () => Navigator.of(context).push(
+                  AppPageRoute<void>(
+                    builder: (_) => const AboutContactScreen(),
+                  ),
+                ),
+                child: const Text('About & contact'),
+              ),
+              child: ProfileScreen(
+                // About-and-contact is pushed rather than being the tab itself:
+                // the tab is the person's account, and the contact form is one
+                // thing they might want from it.
+                onGetInTouch: () => Navigator.of(context).push(
+                  AppPageRoute<void>(
+                    builder: (_) => const AboutContactScreen(),
+                  ),
+                ),
               ),
             ),
           ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Shows [child] to somebody signed in, and an invitation to everybody else.
+///
+/// Whole tabs rather than individual buttons, because these two are *entirely*
+/// account-shaped: an order history and an account page have nothing to show a
+/// guest, and their screens would ask the API questions it answers with a 401.
+///
+/// Rebuilt on the session, so signing in from anywhere -- here, or from the
+/// checkout gate -- swaps the real screen in immediately.
+class _GuestGate extends StatelessWidget {
+  const _GuestGate({
+    required this.icon,
+    required this.title,
+    required this.body,
+    required this.toContinue,
+    required this.child,
+    this.extra,
+  });
+
+  final IconData icon;
+  final String title;
+  final String body;
+  final String toContinue;
+  final Widget child;
+
+  /// Anything still worth offering without an account.
+  final Widget? extra;
+
+  @override
+  Widget build(BuildContext context) {
+    final signedIn = context.select((AuthCubit c) => c.state.isSignedIn);
+    if (signedIn) return child;
+
+    return Scaffold(
+      body: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Flexible(
+            child: SignedOutPanel(
+              icon: icon,
+              title: title,
+              body: body,
+              toContinue: toContinue,
+            ),
+          ),
+          ?extra,
+          const SizedBox(height: AppSpacing.x8),
         ],
       ),
     );

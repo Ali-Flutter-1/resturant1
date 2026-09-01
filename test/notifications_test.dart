@@ -525,4 +525,94 @@ void main() {
       await inbox.close();
     });
   });
+
+  group('every event lands somewhere true', () {
+    NotificationTarget targetOf(String type, String entity) =>
+        NotificationPayload.fromData({
+          'schema_version': '1',
+          'type': type,
+          'entity_type': entity,
+          'entity_id': 'abc',
+        }).target;
+
+    test('a customer event goes to the customer screen, staff to theirs', () {
+      // Sending a customer to a kitchen screen -- or a waiter to a receipt --
+      // is a wrong screen, and a wrong screen is worse than the inbox.
+      for (final type in [
+        'order_preparing',
+        'order_ready',
+        'order_out_for_delivery',
+        'order_completed',
+        'order_rejected',
+        'order_cancelled',
+      ]) {
+        expect(
+          targetOf(type, 'order'),
+          NotificationTarget.customerOrder,
+          reason: type,
+        );
+      }
+
+      for (final type in ['order_placed_admin', 'order_cancelled_admin']) {
+        expect(
+          targetOf(type, 'order'),
+          NotificationTarget.adminOrder,
+          reason: type,
+        );
+      }
+
+      for (final type in [
+        'booking_confirmed',
+        'booking_rejected',
+        'booking_cancelled',
+        'booking_expired',
+      ]) {
+        expect(
+          targetOf(type, 'reservation'),
+          NotificationTarget.customerBooking,
+          reason: type,
+        );
+      }
+    });
+
+    test('a payload that contradicts itself goes to the inbox', () {
+      // A booking event carrying an order id is a payload nobody should act
+      // on: one of the two fields is wrong and there is no telling which.
+      expect(targetOf('order_ready', 'reservation'), NotificationTarget.inbox);
+      expect(targetOf('booking_confirmed', 'order'), NotificationTarget.inbox);
+    });
+
+    test('a future schema is not guessed at', () {
+      // Version 2 may use the same field names for different things. Acting on
+      // it would be acting on a guess.
+      expect(
+        NotificationPayload.fromData({
+          'schema_version': '2',
+          'type': 'order_ready',
+          'entity_type': 'order',
+          'entity_id': 'abc',
+        }).target,
+        NotificationTarget.inbox,
+      );
+    });
+
+    test('a missing id has nothing to open', () {
+      for (final id in [null, '', '   ']) {
+        expect(
+          NotificationPayload.fromData({
+            'schema_version': '1',
+            'type': 'order_ready',
+            'entity_type': 'order',
+            'entity_id': id,
+          }).target,
+          NotificationTarget.inbox,
+          reason: '$id',
+        );
+      }
+    });
+
+    test('an event this build has never heard of goes to the inbox', () {
+      expect(targetOf('order_teleported', 'order'), NotificationTarget.inbox);
+    });
+  });
 }

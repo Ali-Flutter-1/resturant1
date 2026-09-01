@@ -253,8 +253,12 @@ class _RegisterScreenState extends State<RegisterScreen> {
               const _LegalNotice(),
 
               const SizedBox(height: AppSpacing.x4),
-              Row(
-                mainAxisAlignment: MainAxisAlignment.center,
+              // A Wrap, not a Row: at 390pt -- an ordinary phone -- the
+              // prompt and its button together were 41 points wider than the
+              // screen, and a Row has nowhere to put the overflow.
+              Wrap(
+                alignment: WrapAlignment.center,
+                crossAxisAlignment: WrapCrossAlignment.center,
                 children: [
                   Text(
                     'Already have an account?',

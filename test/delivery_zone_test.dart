@@ -5,6 +5,7 @@ import 'package:practice/features/delivery/presentation/delivery_zones_map.dart'
 import 'package:flutter_test/flutter_test.dart';
 import 'package:practice/core/network/api_failure.dart';
 import 'package:practice/features/cart/cart_cubit.dart';
+import 'package:practice/features/orders/domain/order_quote.dart';
 import 'package:practice/features/checkout/presentation/checkout_cubit.dart';
 import 'package:practice/features/delivery/domain/delivery_zone.dart';
 import 'package:practice/features/menu/domain/dish.dart';
@@ -235,5 +236,120 @@ void main() {
       expect(find.text('Zone 3'), findsOneWidget);
       expect(tester.takeException(), isNull);
     });
+  });
+
+  group('what the customer is told', () {
+    test('the shortfall is measured against the zone, not a flat figure', () {
+      // Zone 1 asks £30, Zone 3 asks £55. The same basket is short by
+      // different amounts depending on where it is going, which is exactly why
+      // no minimum may be written into the app.
+      const basket = 1790;
+      for (final (minimum, shortfall) in [(3000, 1210), (5500, 3710)]) {
+        final quote = OrderQuote.fromJson({
+          'items': const [],
+          'subtotal_pence': basket,
+          'delivery_fee_pence': 400,
+          'total_pence': basket + 400,
+          'minimum_order_pence': minimum,
+          'meets_minimum': false,
+          'available_slots': const [],
+        });
+
+        expect(quote.meetsMinimum, isFalse);
+        expect(quote.shortfallPence, shortfall);
+      }
+    });
+
+    test('the delivery fee never counts toward the minimum', () {
+      // £29 of food plus a £4 fee is £33 through the till and still below a
+      // £30 bar. Counting the fee would let an order through that the kitchen
+      // then has to refuse.
+      final quote = OrderQuote.fromJson({
+        'items': const [],
+        'subtotal_pence': 2900,
+        'delivery_fee_pence': 400,
+        'total_pence': 3300,
+        'minimum_order_pence': 3000,
+        'meets_minimum': false,
+        'available_slots': const [],
+      });
+
+      expect(quote.totalPence, greaterThan(quote.minimumOrderPence));
+      expect(quote.meetsMinimum, isFalse);
+      expect(quote.shortfallPence, 100);
+    });
+
+    test('a met minimum reports no shortfall rather than a negative one', () {
+      final quote = OrderQuote.fromJson({
+        'items': const [],
+        'subtotal_pence': 4000,
+        'delivery_fee_pence': 400,
+        'total_pence': 4400,
+        'minimum_order_pence': 3000,
+        'meets_minimum': true,
+        'available_slots': const [],
+      });
+
+      // "Add £-10.00 more" is the kind of thing that ships.
+      expect(quote.shortfallPence, 0);
+    });
+
+    test('an old order with no zone still reads', () {
+      // Before zones existed -- or with every area paused, when the backend
+      // falls back to flat pricing -- the zone fields are absent. A receipt
+      // from last week must not fail to parse.
+      final quote = OrderQuote.fromJson({
+        'items': const [],
+        'subtotal_pence': 1790,
+        'delivery_fee_pence': 299,
+        'total_pence': 2089,
+        'minimum_order_pence': 0,
+        'meets_minimum': true,
+        'available_slots': const [],
+      });
+
+      expect(quote.totalPence, 2089);
+      expect(quote.meetsMinimum, isTrue);
+    });
+  });
+
+  group('switching between delivery and collection', () {
+    test('collection is placeable while the same address is not', () async {
+      zones.deliverable = false;
+      final cubit = CheckoutCubit(repository: orders, cart: cart, zones: zones);
+
+      cubit.setPostcode('IV27 4AB');
+      await cubit.checkPostcode();
+      expect(cubit.state.canPlace, isFalse);
+
+      // The way out of "we do not deliver there" is collection, and it must
+      // actually work -- otherwise the offer is empty.
+      await cubit.setDelivery(false);
+
+      expect(cubit.state.canPlace, isTrue);
+      expect(cubit.state.outsideDeliveryArea, isFalse);
+      await cubit.close();
+    });
+
+    test(
+      'turning delivery back on re-checks the address it already has',
+      () async {
+        final cubit = CheckoutCubit(
+          repository: orders,
+          cart: cart,
+          zones: zones,
+        );
+        await cubit.setDelivery(false);
+        cubit.setPostcode('KW14 7EL');
+
+        await cubit.setDelivery(true);
+
+        // Rather than waiting for the customer to touch the field again, which
+        // would leave the total unknowable for no reason.
+        expect(zones.checkCalls, greaterThan(0));
+        expect(cubit.state.zone?.name, 'Zone 1');
+        await cubit.close();
+      },
+    );
   });
 }

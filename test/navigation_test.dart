@@ -18,6 +18,7 @@ import 'package:practice/features/orders/domain/order_repository.dart';
 import 'package:practice/features/menu/domain/menu_repository.dart';
 import 'package:practice/features/menu/presentation/menu_screen.dart';
 import 'package:practice/features/shell/admin_shell.dart';
+import 'package:practice/features/shell/customer_shell.dart';
 import 'package:practice/shared/widgets/app_nav_bar.dart';
 
 import 'support/auth_fixtures.dart';
@@ -402,6 +403,36 @@ void main() {
       await tester.pump(const Duration(seconds: 2));
 
       expect(find.text('Messages'), findsNothing);
+    });
+  });
+
+  group('what a role may reach in the customer shell', () {
+    testWidgets('an admin never lands in the customer shell', (tester) async {
+      // Role decides the whole shape of the app, and staff sharing the admin
+      // shell is deliberate -- a waiter with the customer tab bar could not
+      // work the queue at all.
+      for (final (user, adminShell) in [
+        (AuthFixtures.admin, true),
+        (AuthFixtures.staff, true),
+        (AuthFixtures.customer, false),
+      ]) {
+        expect(user.role.usesAdminShell, adminShell, reason: user.role.name);
+      }
+    });
+
+    testWidgets('the customer tabs are the five a customer needs', (
+      tester,
+    ) async {
+      await tester.pumpWidget(_host(const CustomerShell()));
+      await tester.pump(const Duration(seconds: 2));
+
+      for (final label in ['Menu', 'Book', 'Orders', 'Profile']) {
+        expect(navTab(label), findsOneWidget, reason: label);
+      }
+      // ...and none of the staff ones, whatever the API would allow.
+      for (final label in ['Analytics', 'Products', 'Reservations']) {
+        expect(navTab(label), findsNothing, reason: label);
+      }
     });
   });
 }

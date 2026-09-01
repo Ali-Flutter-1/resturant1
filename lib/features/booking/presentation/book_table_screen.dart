@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../../auth/presentation/require_sign_in.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 
@@ -105,6 +106,14 @@ class _BookTableViewState extends State<_BookTableView> {
       );
       return;
     }
+
+    // Picking a date, a size and a time is all public -- the sittings endpoint
+    // does not need a session, and being made to register before seeing
+    // whether a table is even free is how somebody decides to ring instead.
+    // The account is asked for here, as the booking becomes theirs, and what
+    // they have filled in survives: this method carries on where it left off.
+    if (!await requireSignIn(context, toContinue: 'to book your table')) return;
+    if (!mounted) return;
 
     AppHaptics.commit();
     final failure = await cubit.submit(

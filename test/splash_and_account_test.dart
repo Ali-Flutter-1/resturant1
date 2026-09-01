@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:practice/features/shell/customer_shell.dart';
+import 'support/guest_providers.dart';
 import 'package:practice/core/network/api_failure.dart';
 import 'package:practice/core/theme/app_theme.dart';
 import 'package:practice/features/auth/auth_cubit.dart';
@@ -43,7 +45,9 @@ void main() {
       await tester.pumpWidget(
         BlocProvider.value(
           value: cubit,
-          child: MaterialApp(theme: AppTheme.light, home: const AppRoot()),
+          child: guestProviders(
+            MaterialApp(theme: AppTheme.light, home: const AppRoot()),
+          ),
         ),
       );
       await tester.pump();
@@ -59,10 +63,11 @@ void main() {
       await tester.pump(const Duration(milliseconds: 200));
       await tester.pumpAndSettle();
 
-      expect(find.byType(LoginScreen), findsOne);
-      // Sign-in is the root, so there is no back arrow to a splash that is not
-      // somewhere to return to.
-      expect(find.byIcon(Icons.arrow_back), findsNothing);
+      // A guest lands in the app, not on a login wall: the menu is public, and
+      // asking for an account before somebody can see what is for sale loses
+      // the sale. Sign-in is asked for later, when the order becomes theirs.
+      expect(find.byType(CustomerShell), findsOne);
+      expect(find.byType(LoginScreen), findsNothing);
     });
 
     testWidgets('waits for a slow restore rather than flashing sign-in', (
@@ -75,7 +80,9 @@ void main() {
       await tester.pumpWidget(
         BlocProvider.value(
           value: cubit,
-          child: MaterialApp(theme: AppTheme.light, home: const AppRoot()),
+          child: guestProviders(
+            MaterialApp(theme: AppTheme.light, home: const AppRoot()),
+          ),
         ),
       );
       await tester.pump(const Duration(seconds: 3));

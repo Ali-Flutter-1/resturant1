@@ -14,6 +14,7 @@ import '../../../shared/widgets/api_error_view.dart';
 import '../../../shared/widgets/app_surface.dart';
 import '../../../shared/widgets/skeleton.dart';
 import '../../auth/session_refresh.dart';
+import '../../auth/auth_cubit.dart';
 import '../domain/app_notification.dart';
 import '../domain/notification_repository.dart';
 import 'notification_routing.dart';
@@ -412,6 +413,18 @@ class NotificationBell extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // Nothing to a guest. The inbox is per-account and its endpoint answers a
+    // session-less request with a 401, so a bell here would be a control that
+    // opens an error -- and there is nothing an account-less visitor could
+    // have been notified about anyway.
+    try {
+      if (!context.select((AuthCubit c) => c.state.isSignedIn)) {
+        return const SizedBox.shrink();
+      }
+    } on ProviderNotFoundException {
+      // No auth in scope either: a standalone screen or a test, handled below.
+    }
+
     // Draws nothing where no cubit is in scope — a screen pumped standalone, or
     // a test. A bell that cannot count anything and opens an inbox that cannot
     // load is a decoration shaped like a control.
