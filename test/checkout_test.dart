@@ -9,9 +9,11 @@ import 'package:practice/features/checkout/presentation/checkout_cubit.dart';
 import 'package:practice/features/checkout/presentation/checkout_screen.dart';
 import 'package:practice/features/menu/domain/dish.dart';
 import 'package:practice/features/orders/domain/order_quote.dart';
+import 'package:practice/features/delivery/domain/delivery_zone_repository.dart';
 import 'package:practice/features/orders/domain/order_repository.dart';
 
 import 'support/auth_fixtures.dart';
+import 'support/fake_delivery_zone_repository.dart';
 import 'support/fake_order_repository.dart';
 
 /// Pricing and placing an order.
@@ -21,6 +23,7 @@ import 'support/fake_order_repository.dart';
 /// and clear the basket only once the order exists.
 void main() {
   late FakeOrderRepository repository;
+  late FakeDeliveryZoneRepository zones;
   late CartCubit cart;
 
   const curry = Dish(
@@ -32,6 +35,7 @@ void main() {
 
   setUp(() {
     repository = FakeOrderRepository();
+    zones = FakeDeliveryZoneRepository();
     cart = CartCubit()..addDish(curry, quantity: 2, notes: 'No coriander');
 
     final view =
@@ -43,15 +47,51 @@ void main() {
   });
 
   CheckoutCubit buildCubit() =>
-      CheckoutCubit(repository: repository, cart: cart);
+      CheckoutCubit(repository: repository, cart: cart, zones: zones);
+
+  /// Gives a cubit a postcode inside a zone.
+  ///
+  /// Delivery is priced per zone, so a delivery quote is refused until the
+  /// postcode is known -- which is the point of the feature, and means any
+  /// test about *quoting* has to say where it is delivering to first. Calling
+  /// `checkPostcode` directly skips the typing debounce.
+  Future<void> primeDelivery(CheckoutCubit cubit) async {
+    cubit.setPostcode('KW14 7EL');
+    // Confirming a postcode re-prices on its own, which is the behaviour --
+    // the fee and the minimum both come from the zone. The counter is reset so
+    // each test still counts only the quotes it asked for itself.
+    await cubit.checkPostcode();
+    repository.quoteCalls = 0;
+  }
+
+  /// Types a postcode into the address form and waits for the zone lookup.
+  ///
+  /// Delivery is priced by zone, so the screen shows no total until this has
+  /// happened -- collecting the postcode before the basket total is the whole
+  /// point of the feature.
+  Future<void> enterPostcode(
+    WidgetTester tester, {
+    String postcode = 'KW14 7EL',
+  }) async {
+    await tester.enterText(
+      find.widgetWithText(TextField, 'KW14 7EL'),
+      postcode,
+    );
+    // Past the typing debounce.
+    await tester.pump(const Duration(milliseconds: 600));
+    await tester.pumpAndSettle();
+  }
 
   Widget wrap({void Function(String)? onPlaced}) => MultiBlocProvider(
     providers: [
       BlocProvider(create: (_) => AuthFixtures.cubit(AuthFixtures.customer)),
       BlocProvider.value(value: cart),
     ],
-    child: RepositoryProvider<OrderRepository>.value(
-      value: repository,
+    child: MultiRepositoryProvider(
+      providers: [
+        RepositoryProvider<OrderRepository>.value(value: repository),
+        RepositoryProvider<DeliveryZoneRepository>.value(value: zones),
+      ],
       child: MaterialApp(
         theme: AppTheme.light,
         home: CheckoutScreen(onPlaceOrder: onPlaced),
@@ -72,13 +112,23 @@ void main() {
       find.widgetWithText(TextField, 'Manchester'),
       'Manchester',
     );
-    await tester.enterText(find.widgetWithText(TextField, 'M1 2AB'), 'M1 2AB');
-    await tester.pump();
+    // Found by its hint, which is a Caithness example now that delivery is
+    // zone-based; the value typed is still the Manchester one the assertions
+    // below expect to reach the API.
+    await tester.enterText(
+      find.widgetWithText(TextField, 'KW14 7EL'),
+      'M1 2AB',
+    );
+    // Past the postcode debounce, so the zone is known and the basket priced
+    // before anything tries to place the order.
+    await tester.pump(const Duration(milliseconds: 600));
+    await tester.pumpAndSettle();
   }
 
   group('quoting', () {
     test('prices the basket when the checkout opens', () async {
       final cubit = buildCubit();
+      await primeDelivery(cubit);
       await cubit.quote();
 
       expect(repository.quoteCalls, 1);
@@ -88,6 +138,7 @@ void main() {
 
     test('re-prices when the fulfilment type changes', () async {
       final cubit = buildCubit();
+      await primeDelivery(cubit);
       await cubit.quote();
 
       await cubit.setDelivery(false);
@@ -99,7 +150,12 @@ void main() {
     });
 
     test('an empty basket is refused before any request', () async {
-      final cubit = CheckoutCubit(repository: repository, cart: CartCubit());
+      final cubit = CheckoutCubit(
+        repository: repository,
+        cart: CartCubit(),
+        zones: zones,
+      );
+      await primeDelivery(cubit);
       await cubit.quote();
 
       expect(repository.quoteCalls, 0);
@@ -109,6 +165,7 @@ void main() {
     test('a failed quote keeps the failure to show', () async {
       repository.quoteFailure = ApiFailure.offline;
       final cubit = buildCubit();
+      await primeDelivery(cubit);
       await cubit.quote();
 
       expect(cubit.state.stage, CheckoutStage.failed);
@@ -126,6 +183,7 @@ void main() {
         meetsMinimum: false,
       );
       final cubit = buildCubit();
+      await primeDelivery(cubit);
       await cubit.quote();
 
       expect(cubit.state.canPlace, isFalse);
@@ -144,6 +202,7 @@ void main() {
       );
       await tester.pumpWidget(wrap());
       await tester.pump(const Duration(seconds: 2));
+      await enterPostcode(tester);
 
       // "Minimum not met" would leave the customer to do the arithmetic.
       expect(find.textContaining('Add £4.00 more'), findsOne);
@@ -153,6 +212,7 @@ void main() {
   group('placing', () {
     test('sends only dish id, quantity and notes per line', () async {
       final cubit = buildCubit();
+      await primeDelivery(cubit);
       await cubit.quote();
 
       await cubit.place(contactName: 'Ali', contactPhone: '07700 900123');
@@ -167,6 +227,7 @@ void main() {
 
     test('clears the basket only after the server confirms', () async {
       final cubit = buildCubit();
+      await primeDelivery(cubit);
       await cubit.quote();
 
       repository.placeFailure = ApiFailure.offline;
@@ -183,6 +244,7 @@ void main() {
 
     test('a retry reuses the same idempotency key', () async {
       final cubit = buildCubit();
+      await primeDelivery(cubit);
       await cubit.quote();
 
       repository.placeFailure = ApiFailure.offline;
@@ -198,12 +260,14 @@ void main() {
 
     test('a genuinely different basket gets a new key', () async {
       final cubit = buildCubit();
+      await primeDelivery(cubit);
       await cubit.quote();
       final first = cubit.idempotencyKey;
 
       cart.addDish(
         const Dish(id: 'd2', name: 'Hoppers', description: '', pricePence: 450),
       );
+      await primeDelivery(cubit);
       await cubit.quote();
 
       // Otherwise the second order would be deduplicated against the first.
@@ -212,6 +276,7 @@ void main() {
 
     test('the key rotates after a successful order', () async {
       final cubit = buildCubit();
+      await primeDelivery(cubit);
       await cubit.quote();
       final used = cubit.idempotencyKey;
 
@@ -222,6 +287,7 @@ void main() {
 
     test('a chosen slot is sent verbatim, with is_asap false', () async {
       final cubit = buildCubit();
+      await primeDelivery(cubit);
       await cubit.quote();
 
       // Whatever the quote actually offered, rather than a date typed in here —
@@ -238,6 +304,7 @@ void main() {
 
     test('ASAP sends no time at all', () async {
       final cubit = buildCubit();
+      await primeDelivery(cubit);
       await cubit.quote();
 
       await cubit.place(contactName: 'Ali', contactPhone: '07700 900123');
@@ -248,6 +315,7 @@ void main() {
 
     test('changing the fulfilment type drops a chosen slot', () async {
       final cubit = buildCubit();
+      await primeDelivery(cubit);
       await cubit.quote();
       cubit.setSlot('2026-08-12T19:15:00Z');
 
@@ -268,6 +336,7 @@ void main() {
         },
       );
       final cubit = buildCubit();
+      await primeDelivery(cubit);
       await cubit.quote();
 
       await cubit.place(contactName: 'Ali', contactPhone: '1');
@@ -285,6 +354,7 @@ void main() {
     testWidgets('renders the server total, never a local sum', (tester) async {
       await tester.pumpWidget(wrap());
       await tester.pump(const Duration(seconds: 2));
+      await enterPostcode(tester);
 
       // The basket's own arithmetic is 2 x £8.95 = £17.90; the server says
       // £20.89 with the fee. The screen shows the server.
@@ -296,6 +366,7 @@ void main() {
     ) async {
       await tester.pumpWidget(wrap());
       await tester.pump(const Duration(seconds: 2));
+      await enterPostcode(tester);
 
       await tester.tap(find.textContaining('Place order'));
       await tester.pump(const Duration(seconds: 1));
@@ -308,6 +379,7 @@ void main() {
     testWidgets('collection asks for no address at all', (tester) async {
       await tester.pumpWidget(wrap());
       await tester.pump(const Duration(seconds: 2));
+      await enterPostcode(tester);
 
       await tester.tap(find.text('Collection'));
       await tester.pump(const Duration(seconds: 2));
@@ -337,6 +409,7 @@ void main() {
     ) async {
       await tester.pumpWidget(wrap());
       await tester.pump(const Duration(seconds: 2));
+      await enterPostcode(tester);
       final quotesAfterLoad = repository.quoteCalls;
 
       // Two of one dish, so the first tap reduces rather than removes.
@@ -383,6 +456,7 @@ void main() {
         );
       await tester.pumpWidget(wrap());
       await tester.pump(const Duration(seconds: 2));
+      await enterPostcode(tester);
 
       // One line of small print, not two: both are instructions on this item,
       // and stacking them made a two-item basket four lines tall.
@@ -392,6 +466,7 @@ void main() {
     testWidgets('offers cash and card, with cash preselected', (tester) async {
       await tester.pumpWidget(wrap());
       await tester.pump(const Duration(seconds: 2));
+      await enterPostcode(tester);
 
       expect(find.text('Cash'), findsOne);
       expect(find.text('Card'), findsOne);
@@ -401,19 +476,23 @@ void main() {
       expect(find.textContaining('Place order'), findsOne);
     });
 
-    testWidgets('choosing card changes what the button promises', (
-      tester,
-    ) async {
+    testWidgets('card is advertised but cannot be chosen yet', (tester) async {
       await tester.pumpWidget(wrap());
       await tester.pump(const Duration(seconds: 2));
+      await enterPostcode(tester);
 
-      await tester.tap(find.text('Card'));
+      // Shown, so "card is coming" is visible rather than the option simply
+      // being absent, which reads as a fault.
+      expect(find.text('Card'), findsOne);
+      expect(find.textContaining('Coming soon'), findsOne);
+
+      await tester.tap(find.text('Card'), warnIfMissed: false);
       await tester.pumpAndSettle();
 
-      // "Pay", because the next thing that happens is a payment page, not a
-      // confirmed order.
-      expect(find.textContaining('Pay ·'), findsOne);
-      expect(find.textContaining('Place order'), findsNothing);
+      // Inert: the backend cannot produce a payment page yet, so choosing it
+      // would walk the customer into a dead end. The order stays cash.
+      expect(find.textContaining('Place order'), findsOne);
+      expect(find.textContaining('Pay ·'), findsNothing);
     });
 
     testWidgets('offers two timing choices rather than a wall of chips', (
@@ -421,6 +500,7 @@ void main() {
     ) async {
       await tester.pumpWidget(wrap());
       await tester.pump(const Duration(seconds: 2));
+      await enterPostcode(tester);
 
       // Sixteen chips in a Wrap is what this replaced.
       expect(find.text('As soon as possible'), findsOne);
@@ -430,6 +510,7 @@ void main() {
     testWidgets('picking a time opens a list of them', (tester) async {
       await tester.pumpWidget(wrap());
       await tester.pump(const Duration(seconds: 2));
+      await enterPostcode(tester);
 
       await tester.tap(find.text('Choose a time'));
       await tester.pumpAndSettle();
@@ -498,7 +579,12 @@ void main() {
         totalPence: 895,
         availableSlots: slotsFromNow([10, 20, 30, 40]),
       );
-      final cubit = CheckoutCubit(repository: repository, cart: cartTaking(20));
+      final cubit = CheckoutCubit(
+        repository: repository,
+        cart: cartTaking(20),
+        zones: zones,
+      );
+      await primeDelivery(cubit);
       await cubit.quote();
 
       // A twenty-minute dish cannot be asked for in ten. Twenty is the boundary
@@ -515,9 +601,19 @@ void main() {
         availableSlots: slotsFromNow([10, 20, 30, 40, 50]),
       );
 
-      final quick = CheckoutCubit(repository: repository, cart: cartTaking(5));
+      final quick = CheckoutCubit(
+        repository: repository,
+        cart: cartTaking(5),
+        zones: zones,
+      );
+      await primeDelivery(quick);
       await quick.quote();
-      final slow = CheckoutCubit(repository: repository, cart: cartTaking(45));
+      final slow = CheckoutCubit(
+        repository: repository,
+        cart: cartTaking(45),
+        zones: zones,
+      );
+      await primeDelivery(slow);
       await slow.quote();
 
       expect(
@@ -534,7 +630,9 @@ void main() {
       final cubit = CheckoutCubit(
         repository: repository,
         cart: cartTaking(120),
+        zones: zones,
       );
+      await primeDelivery(cubit);
       await cubit.quote();
 
       expect(cubit.state.selectableSlots, isEmpty);
@@ -547,7 +645,12 @@ void main() {
         totalPence: 895,
         availableSlots: slotsFromNow([5, 60]),
       );
-      final cubit = CheckoutCubit(repository: repository, cart: cartTaking(30));
+      final cubit = CheckoutCubit(
+        repository: repository,
+        cart: cartTaking(30),
+        zones: zones,
+      );
+      await primeDelivery(cubit);
       await cubit.quote();
 
       final tooSoon = cubit.state.quote!.availableSlots.first;
@@ -563,7 +666,12 @@ void main() {
         totalPence: 895,
         availableSlots: slotsFromNow([5, 60]),
       );
-      final cubit = CheckoutCubit(repository: repository, cart: cartTaking(30));
+      final cubit = CheckoutCubit(
+        repository: repository,
+        cart: cartTaking(30),
+        zones: zones,
+      );
+      await primeDelivery(cubit);
       await cubit.quote();
 
       final later = cubit.state.quote!.availableSlots.last;
@@ -576,6 +684,7 @@ void main() {
       cart = cartTaking(25);
       await tester.pumpWidget(wrap());
       await tester.pump(const Duration(seconds: 2));
+      await enterPostcode(tester);
 
       // An unexplained gap in the times reads as a bug.
       expect(find.textContaining('takes about 25 minutes to cook'), findsOne);

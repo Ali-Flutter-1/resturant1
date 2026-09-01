@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import '../../../core/animations/page_transitions.dart';
+import '../../delivery/presentation/delivery_area_screen.dart';
 import '../../contact/domain/contact_repository.dart';
 import '../../hours/presentation/opening_hours_card.dart';
 import '../../venue/domain/restaurant_location.dart';
@@ -98,6 +100,24 @@ class AboutContactScreen extends StatelessWidget {
                 // The real map, in place of the painted grid that said "Map to
                 // be wired up".
                 const RestaurantMapCard(),
+                const SizedBox(height: AppSpacing.x3),
+                // Beside the venue's own map, because "where are you" and "do
+                // you deliver to me" are the same question asked twice.
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: TextButton.icon(
+                    onPressed: () => Navigator.of(context).push(
+                      AppPageRoute<void>(
+                        builder: (_) => const DeliveryAreaScreen(),
+                      ),
+                    ),
+                    icon: const Icon(
+                      Icons.local_shipping_outlined,
+                      size: AppIconSize.md,
+                    ),
+                    label: const Text('See our delivery areas'),
+                  ),
+                ),
                 const SizedBox(height: AppSpacing.x4),
 
                 // The address is on the map card above; repeating it here was

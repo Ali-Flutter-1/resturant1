@@ -15,6 +15,11 @@ abstract interface class OrderRepository {
   Future<OrderQuote> quote({
     required bool isDelivery,
     required List<CartLine> lines,
+
+    /// Required for a delivery quote: the zone decides both the fee and the
+    /// minimum, and neither is knowable without it. Omitting it on a delivery
+    /// quote comes back as `POSTCODE_REQUIRED`. Ignored for collection.
+    String? postcode,
   });
 
   /// Places the order.

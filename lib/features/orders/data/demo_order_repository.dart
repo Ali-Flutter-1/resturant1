@@ -33,6 +33,7 @@ class DemoOrderRepository implements OrderRepository {
   Future<OrderQuote> quote({
     required bool isDelivery,
     required List<CartLine> lines,
+    String? postcode,
   }) async {
     await Future<void>.delayed(delay);
     final subtotal = lines.fold(0, (sum, l) => sum + l.displayLinePence);

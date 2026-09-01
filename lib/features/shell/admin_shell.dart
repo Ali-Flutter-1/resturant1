@@ -11,6 +11,7 @@ import '../admin/presentation/admin_reservations_screen.dart';
 import '../admin/presentation/admin_contact_screen.dart';
 import '../admin/presentation/admin_users_screen.dart';
 import '../booking/presentation/admin_venue_screen.dart';
+import '../delivery/presentation/admin_zones_screen.dart';
 import '../hours/presentation/admin_working_hours_screen.dart';
 import '../auth/auth_cubit.dart';
 import '../auth/presentation/profile_screen.dart';
@@ -114,6 +115,15 @@ class AdminShell extends StatelessWidget {
                   ? () => Navigator.of(context).push(
                       AppPageRoute<void>(
                         builder: (_) => const AdminVenueScreen(),
+                      ),
+                    )
+                  : null,
+              // Admin only: zones set what every customer is charged, and
+              // the endpoints are denied to staff.
+              onDeliveryAreas: canManageVenue
+                  ? () => Navigator.of(context).push(
+                      AppPageRoute<void>(
+                        builder: (_) => const AdminZonesScreen(),
                       ),
                     )
                   : null,

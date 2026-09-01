@@ -133,6 +133,18 @@ abstract final class ApiConstants {
   static const String adminUserStats = '/admin/users/stats';
   static String adminUser(String id) => '/admin/users/$id';
 
+  // ------------------------------------------------------------- delivery
+
+  /// Every active zone, for the map and its legend. Public.
+  static const String deliveryZones = '/delivery-zones';
+
+  /// Which zone a postcode falls in. Public, and answers "nowhere" with a 200 —
+  /// an address outside the area is a fact, not an error.
+  static const String deliveryZoneCheck = '/delivery-zones/check';
+
+  static const String adminDeliveryZones = '/admin/delivery-zones';
+  static String adminDeliveryZone(String id) => '/admin/delivery-zones/$id';
+
   // ------------------------------------------------------- orders (customer)
 
   /// Prices the basket without creating anything. Call before [orders] so the

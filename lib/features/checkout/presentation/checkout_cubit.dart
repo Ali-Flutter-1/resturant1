@@ -9,6 +9,8 @@ import '../../cart/cart_cubit.dart';
 import '../../orders/domain/customer_order.dart';
 import '../../orders/domain/order_quote.dart';
 import '../../orders/domain/order_repository.dart';
+import '../../delivery/domain/delivery_zone.dart';
+import '../../delivery/domain/delivery_zone_repository.dart';
 import '../../orders/domain/payment_flow.dart';
 
 /// Where a checkout has got to.
@@ -29,6 +31,10 @@ class CheckoutState extends Equatable {
     this.prepMinutes,
     this.paymentMethod = PaymentMethod.cash,
     this.paying = false,
+    this.postcode = '',
+    this.zoneCheck,
+    this.checkingPostcode = false,
+    this.postcodeError,
   });
 
   final CheckoutStage stage;
@@ -46,6 +52,31 @@ class CheckoutState extends Equatable {
 
   /// True while the payment sheet is open or the result is being confirmed.
   final bool paying;
+
+  /// The postcode the quote was priced for. Delivery pricing is zone-based, so
+  /// until this is known the basket total is unknowable.
+  final String postcode;
+
+  /// What the server said about [postcode]. Null before it has been asked.
+  final PostcodeCheck? zoneCheck;
+
+  final bool checkingPostcode;
+
+  /// Set when the postcode itself could not be looked up -- unknown, or the
+  /// lookup service is down. Distinct from a postcode that is simply outside
+  /// every zone, which is a normal answer carried in [zoneCheck].
+  final String? postcodeError;
+
+  /// The zone this order will be charged at, when there is one.
+  DeliveryZone? get zone => zoneCheck?.zone;
+
+  /// Whether delivery has been ruled out for this address.
+  ///
+  /// Only true once the server has actually answered: before that, delivery is
+  /// merely unpriced, and blocking checkout on "not yet asked" would refuse
+  /// every order the moment the screen opened.
+  bool get outsideDeliveryArea =>
+      isDelivery && zoneCheck != null && !zoneCheck!.deliverable;
 
   final ApiFailure? failure;
 
@@ -106,6 +137,9 @@ class CheckoutState extends Equatable {
   bool get canPlace =>
       quote != null &&
       quote!.meetsMinimum &&
+      // Delivery needs a postcode inside a zone. The server refuses either way
+      // -- this only stops the customer filling in a form that cannot be sent.
+      !(isDelivery && !(zoneCheck?.deliverable ?? false)) &&
       stage != CheckoutStage.submitting &&
       stage != CheckoutStage.placed;
 
@@ -122,8 +156,14 @@ class CheckoutState extends Equatable {
     int? prepMinutes,
     PaymentMethod? paymentMethod,
     bool? paying,
+    String? postcode,
+    PostcodeCheck? zoneCheck,
+    bool? checkingPostcode,
+    String? postcodeError,
     bool clearFailure = false,
     bool clearSlot = false,
+    bool clearZoneCheck = false,
+    bool clearPostcodeError = false,
   }) {
     return CheckoutState(
       stage: stage ?? this.stage,
@@ -136,6 +176,12 @@ class CheckoutState extends Equatable {
       prepMinutes: prepMinutes ?? this.prepMinutes,
       paymentMethod: paymentMethod ?? this.paymentMethod,
       paying: paying ?? this.paying,
+      postcode: postcode ?? this.postcode,
+      zoneCheck: clearZoneCheck ? null : (zoneCheck ?? this.zoneCheck),
+      checkingPostcode: checkingPostcode ?? this.checkingPostcode,
+      postcodeError: clearPostcodeError
+          ? null
+          : (postcodeError ?? this.postcodeError),
     );
   }
 
@@ -148,6 +194,10 @@ class CheckoutState extends Equatable {
     placedOrder,
     paymentMethod,
     paying,
+    postcode,
+    zoneCheck,
+    checkingPostcode,
+    postcodeError,
     fieldErrors,
     requestedFor,
     prepMinutes,
@@ -170,14 +220,17 @@ class CheckoutCubit extends Cubit<CheckoutState> {
   CheckoutCubit({
     required OrderRepository repository,
     required CartCubit cart,
+    required DeliveryZoneRepository zones,
     PaymentFlow? paymentFlow,
   }) : _repository = repository,
        _cart = cart,
+       _zones = zones,
        _payments = paymentFlow ?? PaymentFlow(repository: repository),
        super(const CheckoutState());
 
   final OrderRepository _repository;
   final CartCubit _cart;
+  final DeliveryZoneRepository _zones;
   final PaymentFlow _payments;
 
   /// Generated once per checkout attempt. See the class note.
@@ -209,6 +262,7 @@ class CheckoutCubit extends Cubit<CheckoutState> {
   @override
   Future<void> close() {
     _quoteDebounce?.cancel();
+    _postcodeDebounce?.cancel();
     return super.close();
   }
 
@@ -218,6 +272,69 @@ class CheckoutCubit extends Cubit<CheckoutState> {
     if (method == state.paymentMethod) return;
     emit(state.copyWith(paymentMethod: method));
   }
+
+  /// Takes a postcode, finds out whether it can be delivered to, and re-prices.
+  ///
+  /// Debounced like the basket, because this runs while somebody is typing an
+  /// address. The zone decides both the fee and the minimum, so the total on
+  /// screen means nothing until this has answered -- which is why the quote
+  /// follows it rather than running alongside.
+  void setPostcode(String value) {
+    final trimmed = value.trim().toUpperCase();
+    if (trimmed == state.postcode) return;
+
+    emit(
+      state.copyWith(
+        postcode: trimmed,
+        // The previous answer belonged to the previous postcode. Keeping it
+        // would price this address at the last one's zone.
+        clearZoneCheck: true,
+        clearPostcodeError: true,
+      ),
+    );
+
+    _postcodeDebounce?.cancel();
+    if (trimmed.length < 5) return;
+    _postcodeDebounce = Timer(const Duration(milliseconds: 500), checkPostcode);
+  }
+
+  Timer? _postcodeDebounce;
+
+  /// Asks the server which zone the current postcode falls in.
+  Future<void> checkPostcode() async {
+    _postcodeDebounce?.cancel();
+    final postcode = state.postcode;
+    if (postcode.isEmpty) return;
+
+    final ticket = ++_checkTicket;
+    emit(state.copyWith(checkingPostcode: true, clearPostcodeError: true));
+
+    try {
+      final check = await _zones.check(postcode);
+      if (ticket != _checkTicket) return;
+      emit(
+        state.copyWith(
+          zoneCheck: check,
+          // The server normalises spacing and case; echoing its version back
+          // keeps the field and the quote talking about the same address.
+          postcode: check.postcode.isEmpty ? postcode : check.postcode,
+          checkingPostcode: false,
+        ),
+      );
+
+      // Only worth re-pricing when there is a zone to price in.
+      if (check.deliverable) await quote();
+    } on ApiFailure catch (failure) {
+      if (ticket != _checkTicket) return;
+      // The postcode itself is the problem -- unknown, or the lookup service
+      // is down. Reported against the field, not as a screen-wide failure.
+      emit(
+        state.copyWith(checkingPostcode: false, postcodeError: failure.message),
+      );
+    }
+  }
+
+  int _checkTicket = 0;
 
   Future<void> quote() async {
     _quoteDebounce?.cancel();
@@ -236,6 +353,16 @@ class CheckoutCubit extends Cubit<CheckoutState> {
       return;
     }
 
+    // Delivery is priced by zone, so there is nothing to ask for until the
+    // postcode is known and inside one. Asking anyway returns
+    // POSTCODE_REQUIRED or OUTSIDE_DELIVERY_AREA, which would put a red
+    // failure on the screen for the perfectly ordinary state of not having
+    // typed an address yet.
+    if (state.isDelivery && !(state.zoneCheck?.deliverable ?? false)) {
+      emit(state.copyWith(stage: CheckoutStage.ready, clearFailure: true));
+      return;
+    }
+
     // A changed basket is a new order, so it gets a new key. Same basket,
     // retried — including after a timeout — keeps the old one.
     if (_keyedFor != null && _keyedFor != lines) {
@@ -248,6 +375,7 @@ class CheckoutCubit extends Cubit<CheckoutState> {
       final quote = await _repository.quote(
         isDelivery: state.isDelivery,
         lines: lines,
+        postcode: state.postcode,
       );
       if (ticket != _quoteTicket) return;
       emit(
@@ -289,6 +417,13 @@ class CheckoutCubit extends Cubit<CheckoutState> {
   /// Switches between delivery and collection, then re-prices.
   Future<void> setDelivery(bool isDelivery) async {
     if (isDelivery == state.isDelivery) return;
+    // Turning delivery on with an address already typed: find its zone rather
+    // than waiting for the customer to touch the field again.
+    if (isDelivery && state.postcode.isNotEmpty && state.zoneCheck == null) {
+      emit(state.copyWith(isDelivery: true, clearSlot: true));
+      await checkPostcode();
+      return;
+    }
     // The slot is dropped: the two paths have different lead times, and a slot
     // chosen for one is not necessarily offered for the other.
     emit(state.copyWith(isDelivery: isDelivery, clearSlot: true));

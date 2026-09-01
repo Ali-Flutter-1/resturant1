@@ -47,6 +47,9 @@ import 'core/theme/app_theme.dart';
 import 'features/auth/auth_cubit.dart';
 import 'features/auth/login_screen.dart';
 import 'features/cart/cart_cubit.dart';
+import 'features/delivery/data/api_admin_delivery_zone_repository.dart';
+import 'features/delivery/data/api_delivery_zone_repository.dart';
+import 'features/delivery/domain/delivery_zone_repository.dart';
 import 'features/shell/admin_shell.dart';
 import 'features/shell/customer_shell.dart';
 import 'features/welcome/presentation/welcome_screen.dart';
@@ -165,6 +168,10 @@ Future<void> main() async {
       orders: AppConfig.useDemoOrders
           ? DemoOrderRepository()
           : ApiOrderRepository(client: client),
+      // Delivery pricing is zone-based and lives entirely on the server: the
+      // admin redraws areas and changes fees without an app release.
+      deliveryZones: ApiDeliveryZoneRepository(client: client),
+      adminDeliveryZones: ApiAdminDeliveryZoneRepository(client: client),
     ),
   );
 }
@@ -187,6 +194,8 @@ class TsCafeApp extends StatelessWidget {
     required this.inbox,
     required this.workingHours,
     required this.orders,
+    required this.deliveryZones,
+    required this.adminDeliveryZones,
   });
 
   /// Built in `main` so it can be handed the repository and wired to the
@@ -245,6 +254,8 @@ class TsCafeApp extends StatelessWidget {
   /// The signed-in customer's orders. Scoped to the bearer token, so it needs
   /// nothing from the session beyond the client it already shares.
   final OrderRepository orders;
+  final DeliveryZoneRepository deliveryZones;
+  final AdminDeliveryZoneRepository adminDeliveryZones;
 
   @override
   Widget build(BuildContext context) {
@@ -262,6 +273,10 @@ class TsCafeApp extends StatelessWidget {
         RepositoryProvider<NotificationRepository>.value(value: notifications),
         RepositoryProvider<WorkingHoursRepository>.value(value: workingHours),
         RepositoryProvider<OrderRepository>.value(value: orders),
+        RepositoryProvider<DeliveryZoneRepository>.value(value: deliveryZones),
+        RepositoryProvider<AdminDeliveryZoneRepository>.value(
+          value: adminDeliveryZones,
+        ),
       ],
       child: MultiBlocProvider(
         providers: [

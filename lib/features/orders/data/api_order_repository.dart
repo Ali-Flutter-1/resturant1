@@ -16,6 +16,7 @@ class ApiOrderRepository implements OrderRepository {
   Future<OrderQuote> quote({
     required bool isDelivery,
     required List<CartLine> lines,
+    String? postcode,
   }) async {
     final data = await _client.object(
       ApiConstants.orderQuote,
@@ -23,6 +24,11 @@ class ApiOrderRepository implements OrderRepository {
       body: {
         'fulfilment_type': isDelivery ? 'delivery' : 'collection',
         'items': [for (final line in lines) line.toJson()],
+        // Only for delivery, and only when there is one: the server ignores it
+        // for collection, and sending an empty string would fail the lookup
+        // rather than being treated as absent.
+        if (isDelivery && postcode != null && postcode.trim().isNotEmpty)
+          'postcode': postcode.trim().toUpperCase(),
       },
     );
     return OrderQuote.fromJson(data);

@@ -14,6 +14,9 @@ import '../../../shared/widgets/app_surface.dart';
 import '../../auth/auth_cubit.dart';
 import '../../cart/cart_cubit.dart';
 import '../../orders/domain/customer_order.dart';
+import '../../../core/animations/page_transitions.dart';
+import '../../delivery/domain/delivery_zone_repository.dart';
+import '../../delivery/presentation/delivery_area_screen.dart';
 import '../../orders/domain/order_quote.dart';
 import '../../orders/domain/order_repository.dart';
 import 'checkout_cubit.dart';
@@ -40,6 +43,7 @@ class CheckoutScreen extends StatelessWidget {
       create: (context) => CheckoutCubit(
         repository: context.read<OrderRepository>(),
         cart: context.read<CartCubit>(),
+        zones: context.read<DeliveryZoneRepository>(),
       )..quote(),
       child: _CheckoutView(onBack: onBack, onPlaceOrder: onPlaceOrder),
     );
@@ -280,13 +284,19 @@ class _CheckoutViewState extends State<_CheckoutView> {
                                   child: _Field(
                                     label: 'Postcode',
                                     controller: _postcode,
-                                    hint: 'M1 2AB',
+                                    hint: 'KW14 7EL',
                                     textCapitalization:
                                         TextCapitalization.characters,
                                     formatters: [
                                       LengthLimitingTextInputFormatter(12),
                                     ],
-                                    error: _error(state, 'postcode'),
+                                    // What decides the fee and the minimum, so
+                                    // it is looked up as it is typed rather
+                                    // than at the end.
+                                    onChanged: cubit.setPostcode,
+                                    error:
+                                        state.postcodeError ??
+                                        _error(state, 'postcode'),
                                   ),
                                 ),
                               ],
@@ -318,6 +328,17 @@ class _CheckoutViewState extends State<_CheckoutView> {
                         error: _error(state, 'customer_note'),
                       ),
                     ),
+
+                    // What this address costs to deliver to, in the
+                    // server's own words. Above the basket because the total
+                    // below is unknowable until the zone is.
+                    if (state.isDelivery) ...[
+                      const SizedBox(height: AppSpacing.x4),
+                      _DeliveryZonePanel(
+                        state: state,
+                        onCollect: () => cubit.setDelivery(false),
+                      ),
+                    ],
 
                     const SizedBox(height: AppSpacing.x4),
                     _QuotePanel(
@@ -847,6 +868,137 @@ class _QuotePanel extends StatelessWidget {
 /// Card is the default nudge but not the default choice: switching somebody to
 /// paying online without them asking is not a decision a checkout screen gets
 /// to make.
+/// What delivery costs to this address, or why it cannot be delivered to.
+///
+/// Everything here is read from the server: the fee, the minimum, and the
+/// wording when an address is out of range. Nothing about delivery pricing is
+/// hardcoded in the app -- the admin redraws zones and changes prices without
+/// a release, and a number baked in here would quietly become a lie.
+class _DeliveryZonePanel extends StatelessWidget {
+  const _DeliveryZonePanel({required this.state, required this.onCollect});
+
+  final CheckoutState state;
+
+  /// Switches the order to collection, which is the way out of an address we
+  /// do not deliver to.
+  final VoidCallback onCollect;
+
+  @override
+  Widget build(BuildContext context) {
+    final surfaces = context.surfaces;
+    final colours = context.orderColors;
+    final check = state.zoneCheck;
+
+    if (state.checkingPostcode) {
+      return _ZoneNotice(
+        icon: Icons.local_shipping_outlined,
+        tint: surfaces.inkSoft,
+        title: 'Checking your postcode…',
+      );
+    }
+
+    if (state.postcodeError != null) {
+      return _ZoneNotice(
+        icon: Icons.error_outline,
+        tint: colours.overdue,
+        title: state.postcodeError!,
+      );
+    }
+
+    if (check == null) {
+      // Not a failure: they simply have not finished typing.
+      return _ZoneNotice(
+        icon: Icons.local_shipping_outlined,
+        tint: surfaces.inkSoft,
+        title: 'Add your postcode to see the delivery cost.',
+      );
+    }
+
+    if (!check.deliverable) {
+      return _ZoneNotice(
+        icon: Icons.wrong_location_outlined,
+        tint: colours.overdue,
+        // The server's own sentence, not ours.
+        title: check.message,
+        // Two ways out, and the map is the one that answers "where *do* you
+        // deliver, then" without making them guess postcodes.
+        detail: 'See the areas we cover, or switch to collection.',
+        action: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.end,
+          children: [
+            TextButton(
+              onPressed: onCollect,
+              child: const Text('Collect instead'),
+            ),
+            TextButton(
+              onPressed: () => Navigator.of(context).push(
+                AppPageRoute<void>(builder: (_) => const DeliveryAreaScreen()),
+              ),
+              child: const Text('See areas'),
+            ),
+          ],
+        ),
+      );
+    }
+
+    final zone = check.zone!;
+    return _ZoneNotice(
+      icon: Icons.check_circle_outline,
+      tint: colours.ready,
+      title: zone.name,
+      detail:
+          'Minimum order ${OrderQuote.formatPence(zone.minOrderPence)} · '
+          'Delivery ${OrderQuote.formatPence(zone.deliveryFeePence)}',
+    );
+  }
+}
+
+class _ZoneNotice extends StatelessWidget {
+  const _ZoneNotice({
+    required this.icon,
+    required this.tint,
+    required this.title,
+    this.detail,
+    this.action,
+  });
+
+  final IconData icon;
+  final Color tint;
+  final String title;
+  final String? detail;
+  final Widget? action;
+
+  @override
+  Widget build(BuildContext context) {
+    return AppSurface.row(
+      padding: const EdgeInsets.all(AppSpacing.x4),
+      child: Row(
+        children: [
+          Icon(icon, size: AppIconSize.lg, color: tint),
+          const SizedBox(width: AppSpacing.x3),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(title, style: context.texts.titleSmall),
+                if (detail != null)
+                  Text(
+                    detail!,
+                    style: context.texts.bodySmall?.copyWith(
+                      color: context.surfaces.inkMuted,
+                    ),
+                  ),
+              ],
+            ),
+          ),
+          ?action,
+        ],
+      ),
+    );
+  }
+}
+
 class _PaymentMethodPicker extends StatelessWidget {
   const _PaymentMethodPicker({
     required this.method,
@@ -872,16 +1024,20 @@ class _PaymentMethodPicker extends StatelessWidget {
             onTap: () => onChanged(PaymentMethod.cash),
           ),
           const SizedBox(height: AppSpacing.x3),
+          // Advertised, not offered.
+          //
+          // The card path is built and covered by tests, but the backend
+          // cannot reach the payment provider yet -- it returns an order with
+          // no payment page. Letting somebody pick this would walk them
+          // through checkout into a dead end, so it is shown greyed and every
+          // order goes through as cash.
           _PaymentOption(
             icon: Icons.credit_card,
             title: 'Card',
-            // Said up front, because it changes what happens next: the kitchen
-            // does not start a card order until the money clears.
-            detail:
-                'Pay now on a secure page. Your order is confirmed once '
-                'the payment goes through.',
-            selected: method == PaymentMethod.card,
-            onTap: () => onChanged(PaymentMethod.card),
+            detail: 'Coming soon. Pay the restaurant directly for now.',
+            selected: false,
+            enabled: false,
+            onTap: null,
           ),
         ],
       ),
@@ -896,21 +1052,30 @@ class _PaymentOption extends StatelessWidget {
     required this.detail,
     required this.selected,
     required this.onTap,
+    this.enabled = true,
   });
 
   final IconData icon;
   final String title;
   final String detail;
   final bool selected;
-  final VoidCallback onTap;
+  final VoidCallback? onTap;
+
+  /// False for a method that exists in the app but cannot be used yet. It is
+  /// still drawn -- greyed and inert -- because "card is coming" is worth
+  /// knowing, and an option that silently disappears looks like a fault.
+  final bool enabled;
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
+    final ink = enabled ? scheme.onSurface : context.surfaces.inkSoft;
+    final accent = enabled ? scheme.primary : context.surfaces.inkSoft;
 
     return Semantics(
       selected: selected,
       button: true,
+      enabled: enabled,
       child: Material(
         color: Colors.transparent,
         borderRadius: BorderRadius.circular(AppRadius.md),
@@ -927,7 +1092,7 @@ class _PaymentOption extends StatelessWidget {
                   : context.surfaces.ground,
               borderRadius: BorderRadius.circular(AppRadius.md),
               border: Border.all(
-                color: selected ? scheme.primary : context.surfaces.line,
+                color: selected ? accent : context.surfaces.line,
                 width: selected ? 1.5 : 1,
               ),
             ),
@@ -936,14 +1101,17 @@ class _PaymentOption extends StatelessWidget {
                 Icon(
                   icon,
                   size: AppIconSize.lg,
-                  color: selected ? scheme.primary : context.surfaces.inkSoft,
+                  color: selected ? accent : context.surfaces.inkSoft,
                 ),
                 const SizedBox(width: AppSpacing.x3),
                 Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(title, style: context.texts.titleSmall),
+                      Text(
+                        title,
+                        style: context.texts.titleSmall?.copyWith(color: ink),
+                      ),
                       Text(
                         detail,
                         style: context.texts.bodySmall?.copyWith(
@@ -1217,6 +1385,7 @@ class _Field extends StatelessWidget {
   const _Field({
     required this.label,
     required this.controller,
+    this.onChanged,
     this.hint,
     this.keyboardType,
     this.textCapitalization = TextCapitalization.sentences,
@@ -1234,6 +1403,10 @@ class _Field extends StatelessWidget {
   final List<TextInputFormatter>? formatters;
   final String? error;
 
+  /// Watched where a field changes what the order costs, rather than only
+  /// being read when it is submitted.
+  final ValueChanged<String>? onChanged;
+
   @override
   Widget build(BuildContext context) {
     final colours = context.orderColors;
@@ -1249,6 +1422,7 @@ class _Field extends StatelessWidget {
           textCapitalization: textCapitalization,
           maxLines: maxLines,
           inputFormatters: formatters,
+          onChanged: onChanged,
           decoration: InputDecoration(
             hintText: hint,
             isDense: true,

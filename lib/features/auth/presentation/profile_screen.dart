@@ -32,6 +32,7 @@ class ProfileScreen extends StatelessWidget {
     this.onManageUsers,
     this.onOpeningHours,
     this.onManageVenue,
+    this.onDeliveryAreas,
   });
 
   /// Opens the contact form. Optional, because the customer app has it on its
@@ -55,6 +56,9 @@ class ProfileScreen extends StatelessWidget {
 
   /// Opens tables and sittings. Admin only — the API denies staff both.
   final VoidCallback? onManageVenue;
+
+  /// Admin only: the delivery map, its areas, and what each one charges.
+  final VoidCallback? onDeliveryAreas;
 
   @override
   Widget build(BuildContext context) {
@@ -130,11 +134,21 @@ class ProfileScreen extends StatelessWidget {
                   ),
                   const SizedBox(height: AppSpacing.x3),
                 ],
+                if (onDeliveryAreas != null) ...[
+                  _LinkTile(
+                    icon: Icons.local_shipping_outlined,
+                    title: 'Delivery areas',
+                    subtitle: 'Where you deliver, and what each area costs',
+                    onTap: onDeliveryAreas!,
+                  ),
+                  const SizedBox(height: AppSpacing.x3),
+                ],
                 if (onGetInTouch != null ||
                     onOpenMessages != null ||
                     onManageUsers != null ||
                     onOpeningHours != null ||
-                    onManageVenue != null)
+                    onManageVenue != null ||
+                    onDeliveryAreas != null)
                   const SizedBox(height: AppSpacing.x2),
                 const AccountPanel(),
               ].revealStaggered(),

@@ -590,4 +590,66 @@ void main() {
       expect(order.paymentUrl, 'https://hpp-sandbox.worldpay.com/x');
     });
   });
+
+  group('quoting on the wire', () {
+    Future<ResponseBody> ok(RequestOptions _) async => _json(
+      200,
+      '{"success":true,"message":"ok","data":{"items":[],'
+      '"subtotal_pence":0,"delivery_fee_pence":400,"total_pence":400,'
+      '"minimum_order_pence":3000,"meets_minimum":false,'
+      '"earliest_slot":null,"available_slots":[]}}',
+    );
+
+    test('a delivery quote carries the postcode, normalised', () async {
+      final adapter = _StubAdapter(ok);
+      final repository = ApiOrderRepository(
+        client: _client(handler: ok, adapter: adapter),
+      );
+
+      await repository.quote(
+        isDelivery: true,
+        lines: const [],
+        postcode: ' kw14 7el ',
+      );
+
+      // The zone -- and so the fee and the minimum -- is decided by this.
+      final body = adapter.calls.single.data as Map;
+      expect(body['postcode'], 'KW14 7EL');
+    });
+
+    test('a collection quote sends no postcode at all', () async {
+      final adapter = _StubAdapter(ok);
+      final repository = ApiOrderRepository(
+        client: _client(handler: ok, adapter: adapter),
+      );
+
+      await repository.quote(
+        isDelivery: false,
+        lines: const [],
+        postcode: 'KW14 7EL',
+      );
+
+      // Ignored by the server, but sending it would imply the address matters
+      // to a collection order, and an empty string would fail the lookup
+      // rather than being read as absent.
+      expect(
+        (adapter.calls.single.data as Map).keys,
+        isNot(contains('postcode')),
+      );
+    });
+
+    test('an empty postcode is left out rather than sent blank', () async {
+      final adapter = _StubAdapter(ok);
+      final repository = ApiOrderRepository(
+        client: _client(handler: ok, adapter: adapter),
+      );
+
+      await repository.quote(isDelivery: true, lines: const [], postcode: '  ');
+
+      expect(
+        (adapter.calls.single.data as Map).keys,
+        isNot(contains('postcode')),
+      );
+    });
+  });
 }

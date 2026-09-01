@@ -55,6 +55,10 @@ class FakeOrderRepository implements OrderRepository {
   ApiFailure? placeFailure;
 
   int quoteCalls = 0;
+
+  /// What the last quote was priced for. Null for collection, which needs no
+  /// postcode and must not send one.
+  String? lastQuotePostcode;
   int placeCalls = 0;
   bool? lastQuoteDelivery;
 
@@ -125,9 +129,11 @@ class FakeOrderRepository implements OrderRepository {
   Future<OrderQuote> quote({
     required bool isDelivery,
     required List<CartLine> lines,
+    String? postcode,
   }) async {
     quoteCalls++;
     lastQuoteDelivery = isDelivery;
+    lastQuotePostcode = postcode;
     final error = quoteFailure ?? failure;
     if (error != null) throw error;
     return quoteResult;

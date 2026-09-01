@@ -13,6 +13,7 @@ import 'package:practice/features/discover/presentation/discover_screen.dart';
 import 'package:practice/features/menu/presentation/dish_details_screen.dart';
 import 'package:practice/features/admin/domain/admin_menu_repository.dart';
 import 'package:practice/features/admin/domain/admin_order_repository.dart';
+import 'package:practice/features/delivery/domain/delivery_zone_repository.dart';
 import 'package:practice/features/orders/domain/order_repository.dart';
 import 'package:practice/features/menu/domain/menu_repository.dart';
 import 'package:practice/features/menu/presentation/menu_screen.dart';
@@ -22,6 +23,7 @@ import 'package:practice/shared/widgets/app_nav_bar.dart';
 import 'support/auth_fixtures.dart';
 import 'support/fake_admin_menu_repository.dart';
 import 'support/fake_admin_order_repository.dart';
+import 'support/fake_delivery_zone_repository.dart';
 import 'support/fake_order_repository.dart';
 import 'support/fake_menu_repository.dart';
 import 'package:practice/features/booking/domain/reservation_repository.dart';
@@ -61,6 +63,9 @@ Widget _host(Widget home, {TargetPlatform? platform}) {
         ),
         RepositoryProvider<OrderRepository>(
           create: (_) => FakeOrderRepository(),
+        ),
+        RepositoryProvider<DeliveryZoneRepository>(
+          create: (_) => FakeDeliveryZoneRepository(),
         ),
       ],
       child: MaterialApp(theme: theme, home: home),
@@ -281,6 +286,9 @@ void main() {
               RepositoryProvider<OrderRepository>(
                 create: (_) => FakeOrderRepository(),
               ),
+              RepositoryProvider<DeliveryZoneRepository>(
+                create: (_) => FakeDeliveryZoneRepository(),
+              ),
             ],
             child: MaterialApp(theme: AppTheme.light, home: const AdminShell()),
           ),
@@ -337,6 +345,9 @@ void main() {
           ),
           RepositoryProvider<OrderRepository>(
             create: (_) => FakeOrderRepository(),
+          ),
+          RepositoryProvider<DeliveryZoneRepository>(
+            create: (_) => FakeDeliveryZoneRepository(),
           ),
         ],
         child: MaterialApp(theme: AppTheme.light, home: const AdminShell()),
