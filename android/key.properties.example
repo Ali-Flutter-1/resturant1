@@ -1,0 +1,22 @@
+# Copy this file to key.properties and fill in your keystore details.
+# Do NOT commit key.properties or the keystore itself — both are gitignored.
+#
+# Generate an upload keystore (one-time):
+#   keytool -genkeypair -v -keystore upload-keystore.jks \
+#     -storetype PKCS12 -keyalg RSA -keysize 2048 -validity 10000 -alias upload
+#
+# For Play App Signing this is your *upload* key; Google holds the app signing
+# key that end users' devices actually verify. Both fingerprints have to be
+# registered in Firebase, or Google Sign-In works in testing and fails from Play.
+#
+# Back the keystore and these passwords up off this machine. Play matches every
+# future update to this key: lose it and the listing can never be updated again.
+#
+# storeFile may be an absolute path (recommended — keeps the key out of the
+# repository) or a bare filename, which is looked for in android/app/ and
+# android/.
+
+storePassword=your_keystore_password
+keyPassword=your_key_password
+keyAlias=upload
+storeFile=upload-keystore.jks
