@@ -1,6 +1,7 @@
 import 'package:equatable/equatable.dart';
 
 import '../../menu/domain/spice_level.dart';
+import 'order_quote.dart';
 
 /// Where an order has got to, as the customer needs to understand it.
 ///
@@ -15,7 +16,21 @@ import '../../menu/domain/spice_level.dart';
 /// state, and the right response is to show the order as in progress, not to
 /// fail the whole history screen because one row is newer than the app.
 enum CustomerOrderStatus {
+  /// A card order the customer has not paid for yet. It is **not** with the
+  /// kitchen: the backend holds it until Worldpay authorises the money.
+  awaitingPayment(
+    'Awaiting payment',
+    'Complete payment to confirm your order.',
+  ),
   placed('Order placed', 'We have your order and the kitchen has been told.'),
+
+  /// The restaurant has said yes and the card hold is being captured. A
+  /// transient state nobody needs to act on -- and specifically not one to
+  /// offer a Pay button in, because the money is already committed.
+  accepting(
+    'Confirming',
+    'The restaurant accepted your order and we are confirming the payment.',
+  ),
   preparing('Being prepared', 'The kitchen is cooking your food now.'),
   ready('Ready', 'Your order is ready and waiting for you.'),
   outForDelivery(
@@ -23,6 +38,9 @@ enum CustomerOrderStatus {
     'Your rider has your order and is heading over.',
   ),
   completed('Completed', 'Delivered and done. Thanks for ordering.'),
+
+  /// Cancelled, with the card hold still being released.
+  cancelling('Cancelling', 'We are releasing the hold on your card.'),
   cancelled('Cancelled', 'This order was cancelled.');
 
   const CustomerOrderStatus(this.label, this.explanation);
@@ -36,10 +54,13 @@ enum CustomerOrderStatus {
   static CustomerOrderStatus fromApi(String? raw) => switch (raw
       ?.trim()
       .toLowerCase()) {
+    'awaiting_payment' || 'awaiting_payment_confirmation' => awaitingPayment,
     'placed' || 'pending' || 'confirmed' || 'accepted' => placed,
+    'acceptance_pending' || 'accepting' => accepting,
     'preparing' || 'in_progress' || 'cooking' => preparing,
     'ready' || 'ready_for_collection' || 'ready_for_pickup' => ready,
     'out_for_delivery' || 'delivering' || 'dispatched' => outForDelivery,
+    'cancellation_pending' || 'cancelling' => cancelling,
     'completed' ||
     'served' ||
     'collected' ||
@@ -54,7 +75,13 @@ enum CustomerOrderStatus {
   /// Whether this order is still happening, and so belongs at the top of the
   /// screen rather than in the history list.
   bool get isLive => switch (this) {
-    placed || preparing || ready || outForDelivery => true,
+    awaitingPayment ||
+    placed ||
+    accepting ||
+    preparing ||
+    ready ||
+    outForDelivery ||
+    cancelling => true,
     completed || cancelled => false,
   };
 
@@ -63,11 +90,15 @@ enum CustomerOrderStatus {
   /// Cancelled has no place on a track that only moves forwards, and drawing it
   /// at step zero would suggest it was about to start again.
   int? get step => switch (this) {
-    placed => 0,
+    // Not on the track at all: an unpaid card order has not reached the
+    // kitchen, and drawing it at step zero would claim it had.
+    awaitingPayment => null,
+    placed || accepting => 0,
     preparing => 1,
     ready || outForDelivery => 2,
     completed => 3,
-    cancelled => null,
+    // A cancellation in progress is leaving the track, not moving along it.
+    cancelling || cancelled => null,
   };
 
   /// How many stops the tracker draws.
@@ -86,6 +117,8 @@ class CustomerOrderItem extends Equatable {
     required this.linePence,
     this.spiceLevel,
     this.notes,
+    this.variantName,
+    this.selections = const [],
   });
 
   factory CustomerOrderItem.fromJson(Map<String, dynamic> json) {
@@ -96,6 +129,7 @@ class CustomerOrderItem extends Equatable {
     // that has to match the payment.
     final line = json['line_total_pence'] as num?;
     final unit = json['unit_price_pence'] as num?;
+    final selections = json['selections'];
 
     return CustomerOrderItem(
       // `name`, not a nested dish: the API stores the name on the line so an
@@ -110,6 +144,21 @@ class CustomerOrderItem extends Equatable {
       notes: (json['notes']?.toString().trim().isEmpty ?? true)
           ? null
           : json['notes'].toString().trim(),
+      // Snapshots, like the name: what was bought stays on the receipt even
+      // after the admin renames the size or withdraws the option.
+      variantName: (json['variant_name']?.toString().trim().isEmpty ?? true)
+          ? null
+          : json['variant_name'].toString().trim(),
+      // The same shape the quote returns, so the receipt and the checkout
+      // summary render from one widget rather than two that can drift.
+      selections: selections is List
+          ? selections
+                .whereType<Map>()
+                .map(
+                  (s) => QuoteSelection.fromJson(Map<String, dynamic>.from(s)),
+                )
+                .toList()
+          : const [],
     );
   }
 
@@ -119,8 +168,26 @@ class CustomerOrderItem extends Equatable {
   final SpiceLevel? spiceLevel;
   final String? notes;
 
+  /// The size, serving or package that was bought. Null for a plain dish.
+  final String? variantName;
+
+  /// The options that were chosen, with the server's included/charged split.
+  final List<QuoteSelection> selections;
+
+  /// The dish and its variant on one line — "Custom Breakfast (6 Items)".
+  String get titleWithVariant =>
+      variantName == null ? dishName : '$dishName ($variantName)';
+
   @override
-  List<Object?> get props => [dishName, quantity, linePence, spiceLevel, notes];
+  List<Object?> get props => [
+    dishName,
+    quantity,
+    linePence,
+    spiceLevel,
+    notes,
+    variantName,
+    selections,
+  ];
 }
 
 /// How the customer chose to pay.
@@ -143,9 +210,32 @@ enum PaymentMethod {
 /// backend's webhook, server to server. The app never decides this -- a closed
 /// payment sheet and a success-looking redirect both prove nothing.
 enum CustomerPaymentStatus {
+  /// Nothing has been taken. For a card order this is the one state that
+  /// carries a `payment_url` and the one state a Pay button belongs in.
   pending('pending'),
+
+  /// The card has been authorised: the money is ringfenced but not taken. The
+  /// customer must **never** be asked to pay again from here.
+  authorized('authorized'),
+
+  /// The restaurant accepted and the hold is being turned into a charge.
+  capturePending('capture_pending'),
+
+  /// Taken.
+  captured('captured'),
+
+  /// Cash, settled on handover.
   paid('paid'),
+
+  /// The hold is being released after a cancellation or rejection.
+  cancelPending('cancel_pending'),
+
+  /// The hold was released. No money moved.
+  cancelled('cancelled'),
+
+  /// Declined. The order is kept and a fresh payment page can be asked for.
   failed('failed'),
+
   refunded('refunded');
 
   const CustomerPaymentStatus(this.wire);
@@ -154,11 +244,29 @@ enum CustomerPaymentStatus {
 
   static CustomerPaymentStatus fromApi(String? raw) =>
       switch (raw?.trim().toLowerCase()) {
+        'authorized' || 'authorised' => authorized,
+        'capture_pending' || 'capturing' => capturePending,
+        'captured' => captured,
         'paid' => paid,
+        'cancel_pending' || 'cancelling' || 'releasing' => cancelPending,
+        'cancelled' || 'canceled' || 'voided' || 'released' => cancelled,
         'failed' || 'declined' || 'refused' => failed,
         'refunded' => refunded,
         _ => pending,
       };
+
+  /// Whether the money is committed -- authorised, being captured, or taken.
+  ///
+  /// The single check that keeps a second Pay button off the screen. Getting
+  /// this wrong is the one bug in this flow that costs a customer money.
+  bool get isCommitted => switch (this) {
+    authorized || capturePending || captured || paid => true,
+    pending || cancelPending || cancelled || failed || refunded => false,
+  };
+
+  /// Whether something is in flight at the provider and the app should keep
+  /// refreshing rather than settling on what it sees.
+  bool get isSettling => this == capturePending || this == cancelPending;
 }
 
 /// An order as the customer's own history shows it.
@@ -310,20 +418,82 @@ class CustomerOrder extends Equatable {
   final DateTime? paidAt;
 
   bool get isCard => paymentMethod == PaymentMethod.card;
-  bool get isPaid => paymentStatus == CustomerPaymentStatus.paid;
 
-  /// A card order the customer still owes money on.
+  bool get isPaid =>
+      paymentStatus == CustomerPaymentStatus.paid ||
+      paymentStatus == CustomerPaymentStatus.captured;
+
+  /// A card order the customer still owes money on and can act on.
   ///
-  /// A refunded order is deliberately excluded: money moved and then moved
-  /// back, and asking for it again would be asking them to pay twice.
-  bool get needsPayment =>
-      isCard && !isPaid && paymentStatus != CustomerPaymentStatus.refunded;
+  /// Deliberately narrow. Only two states qualify: nothing attempted yet, and
+  /// a decline the customer can retry. Everything else -- authorised, being
+  /// captured, captured, being released, released, refunded -- must show no
+  /// Pay button at all, because in every one of those the money has either
+  /// already been committed or deliberately let go. Showing one anyway is how
+  /// a customer pays twice for one meal.
+  bool get needsPayment {
+    if (!isCard || status == CustomerOrderStatus.cancelled) return false;
+    return paymentStatus == CustomerPaymentStatus.pending ||
+        paymentStatus == CustomerPaymentStatus.failed;
+  }
+
+  /// Whether tapping Pay should ask the server for a fresh page first.
+  ///
+  /// A declined payment cannot reuse its old URL -- Worldpay treats the same
+  /// reference as the same attempt -- and a pending order with no URL never got
+  /// one. Both are `POST /orders/{id}/pay`.
+  bool get needsFreshPaymentPage =>
+      needsPayment &&
+      (paymentStatus == CustomerPaymentStatus.failed ||
+          paymentUrl == null ||
+          paymentUrl!.isEmpty);
 
   /// A card order that has been placed but not paid has **not** reached the
   /// kitchen -- the backend holds it until the payment webhook lands -- so it
   /// must never be described as being cooked.
   bool get awaitingPayment =>
       isCard && paymentStatus == CustomerPaymentStatus.pending;
+
+  /// The card was declined and the order is still there to retry.
+  bool get paymentFailed =>
+      isCard && paymentStatus == CustomerPaymentStatus.failed;
+
+  /// Money is committed but the provider has not finished. Keep refreshing.
+  bool get isSettlingPayment => isCard && paymentStatus.isSettling;
+
+  /// Whether the app should still be polling this order's payment.
+  ///
+  /// Anything settling, plus a pending card order the customer has just come
+  /// back to from the hosted page.
+  bool get isPaymentInFlight =>
+      isCard && (paymentStatus.isSettling || awaitingPayment);
+
+  /// What to tell the customer about the money, or null when there is nothing
+  /// worth saying -- a cash order, or a paid one that speaks for itself.
+  ///
+  /// This is the state matrix from the payment guide, in one place, so no
+  /// screen has to re-derive it and no two screens can disagree.
+  String? get paymentMessage {
+    if (!isCard) return null;
+    return switch (paymentStatus) {
+      CustomerPaymentStatus.pending =>
+        'Complete payment to confirm your order.',
+      CustomerPaymentStatus.authorized =>
+        'Card authorised. Waiting for the restaurant to accept your order.',
+      CustomerPaymentStatus.capturePending =>
+        'The restaurant accepted your order. Confirming the payment now.',
+      CustomerPaymentStatus.captured => null,
+      CustomerPaymentStatus.paid => null,
+      CustomerPaymentStatus.cancelPending =>
+        'Releasing the hold on your card. Nothing has been taken.',
+      CustomerPaymentStatus.cancelled =>
+        'The hold on your card was released. You have not been charged.',
+      CustomerPaymentStatus.failed =>
+        'Your card was declined. Your order is saved - try again to confirm '
+            'it.',
+      CustomerPaymentStatus.refunded => 'This order was refunded.',
+    };
+  }
 
   /// Whether the lines are known, or only how many there were.
   ///
@@ -346,10 +516,8 @@ class CustomerOrder extends Equatable {
     if (wasRejected) return 'Declined';
     // An unpaid card order has not been sent to the kitchen at all, so no
     // kitchen-facing status describes it honestly.
-    if (awaitingPayment) return 'Awaiting payment';
-    if (isCard && paymentStatus == CustomerPaymentStatus.failed) {
-      return 'Payment declined';
-    }
+    if (awaitingPayment && status.isLive) return 'Awaiting payment';
+    if (paymentFailed && status.isLive) return 'Payment declined';
     return !isDelivery && status == CustomerOrderStatus.outForDelivery
         ? 'Ready to collect'
         : status.label;
@@ -362,12 +530,14 @@ class CustomerOrder extends Equatable {
     // The backend holds a card order out of the kitchen until Worldpay's
     // webhook confirms the money, so "we're preparing it" would be false and
     // the customer would stop watching for the thing that still needs doing.
-    if (awaitingPayment) {
-      return 'Complete payment to confirm your order.';
-    }
-    if (isCard && paymentStatus == CustomerPaymentStatus.failed) {
-      return 'Your card was declined. Your order is saved - try again to '
-          'confirm it.';
+    if (status.isLive) {
+      // The payment matrix wins while the order is live: "being prepared" is
+      // the wrong thing to read when the card was declined.
+      final money = paymentMessage;
+      if (money != null &&
+          (awaitingPayment || paymentFailed || isSettlingPayment)) {
+        return money;
+      }
     }
     return !isDelivery && status == CustomerOrderStatus.ready
         ? 'Your order is ready to collect from the counter.'

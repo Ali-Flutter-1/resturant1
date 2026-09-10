@@ -1,5 +1,7 @@
 import 'package:equatable/equatable.dart';
 
+import '../../../core/money/pence.dart' as money;
+
 /// Takings, in integer pence.
 ///
 /// **Completed orders only**, bucketed by when they completed. Cancelled and
@@ -129,15 +131,6 @@ int _int(Object? value) => (value as num?)?.toInt() ?? 0;
 Map<String, dynamic> _map(Object? value) =>
     value is Map ? Map<String, dynamic>.from(value) : const {};
 
-/// Integer pence as pounds. Never parses or rounds a server value — they are
-/// already exact.
-String formatPence(int pence) {
-  final pounds = pence ~/ 100;
-  final pennies = (pence % 100).toString().padLeft(2, '0');
-  // Thousands separators, so £4,310.25 does not read as £431025.
-  final grouped = pounds.toString().replaceAllMapped(
-    RegExp(r'(\d)(?=(\d{3})+$)'),
-    (m) => '${m[1]},',
-  );
-  return '£$grouped.$pennies';
-}
+/// Re-exported so the dashboard's call sites keep working. The one
+/// implementation lives in `core/money/pence.dart`.
+String formatPence(int pence) => money.formatPence(pence);

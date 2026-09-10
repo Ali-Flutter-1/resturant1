@@ -1,4 +1,5 @@
 import '../../menu/domain/dish.dart';
+import 'dish_configuration_draft.dart';
 
 /// Managing the menu: what staff can change, as opposed to what customers read.
 ///
@@ -7,6 +8,21 @@ import '../../menu/domain/dish.dart';
 /// everything, including hidden and sold-out, which is precisely what an admin
 /// screen needs and a customer must never see.
 abstract interface class AdminMenuRepository {
+  /// Replaces a dish's variants and option groups in one atomic write.
+  ///
+  /// This is the single mechanism for every configurable product — pizzas,
+  /// drinks, breakfasts and anything the kitchen invents next. There is
+  /// deliberately no per-category endpoint, and adding one would be the wrong
+  /// shape.
+  ///
+  /// Returns the dish as it now stands, so the caller renders the server's
+  /// version — which carries the ids the codes were resolved to — rather than
+  /// its own draft.
+  Future<Dish> setDishConfiguration(
+    String dishId,
+    DishConfigurationDraft draft,
+  );
+
   /// Every category, including hidden ones.
   Future<List<MenuCategory>> categories();
 

@@ -460,7 +460,7 @@ void main() {
 
       // One line of small print, not two: both are instructions on this item,
       // and stacking them made a two-item basket four lines tall.
-      expect(find.text('High spice · No coriander'), findsOneWidget);
+      expect(find.text('Hot spice · No coriander'), findsOneWidget);
     });
 
     testWidgets('offers cash and card, with cash preselected', (tester) async {

@@ -103,6 +103,12 @@ abstract final class ApiConstants {
   static String adminDish(String id) => '/admin/dishes/$id';
   static String adminDishRestore(String id) => '/admin/dishes/$id/restore';
 
+  /// The whole configurable structure for one dish — variants, option groups
+  /// and the rules between them. PUT **replaces** it atomically; there is no
+  /// patch, so a caller must send the complete desired state.
+  static String adminDishConfiguration(String id) =>
+      '/admin/dishes/$id/configuration';
+
   /// POST appends uploaded files; PATCH reorders by sending every `public_id`
   /// in the wanted order. The first image is the thumbnail.
   static String adminDishImages(String dishId) =>

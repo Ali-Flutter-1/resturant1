@@ -18,6 +18,8 @@ import '../../menu/domain/dish.dart';
 import '../domain/admin_menu_repository.dart';
 import 'category_logo_sheet.dart';
 import 'admin_menu_cubit.dart';
+import '../../../core/animations/page_transitions.dart';
+import 'dish_configuration_screen.dart';
 import 'dish_editor_sheet.dart';
 import '../../auth/session_refresh.dart';
 import '../../../shared/widgets/page_body.dart';
@@ -62,6 +64,23 @@ class _AdminMenuViewState extends State<_AdminMenuView> {
   void dispose() {
     _search.dispose();
     super.dispose();
+  }
+
+  /// Opens the variants-and-choices editor for one dish.
+  ///
+  /// A separate screen rather than another tab in the dish sheet: the dish
+  /// sheet is about what the dish *is*, and this is about how it is sold. They
+  /// are edited at different times by different people, and the configuration
+  /// is written through its own atomic endpoint.
+  Future<void> _openConfiguration(Dish dish) async {
+    final cubit = context.read<AdminMenuCubit>();
+    final saved = await Navigator.of(context).push<Dish>(
+      AppPageRoute<Dish>(builder: (_) => DishConfigurationScreen(dish: dish)),
+    );
+    if (saved == null || !mounted) return;
+    // The server's version, with codes resolved to ids — so the row's price
+    // and "from" label follow immediately.
+    cubit.adopt(saved);
   }
 
   Future<void> _openEditor({Dish? dish}) async {
@@ -259,6 +278,7 @@ class _AdminMenuViewState extends State<_AdminMenuView> {
                                 onAvailabilityChanged: (value) =>
                                     _setAvailability(dish, value),
                                 onEdit: () => _openEditor(dish: dish),
+                                onConfigure: () => _openConfiguration(dish),
                                 onDelete: () => _deleteDish(dish),
                               ).revealItem(position, duration: Motion.fast);
                             },
@@ -384,7 +404,7 @@ class _CategoryStrip extends StatelessWidget {
 }
 
 /// What the overflow menu on a row offers.
-enum _DishAction { edit, delete }
+enum _DishAction { edit, configure, delete }
 
 /// One dish, laid out as the frame's 114pt item: 80pt thumbnail, then name and
 /// price on one line, a single-line description under it, and tag pills below
@@ -397,6 +417,7 @@ class _DishCard extends StatelessWidget {
     required this.busy,
     required this.onAvailabilityChanged,
     required this.onEdit,
+    required this.onConfigure,
     required this.onDelete,
   });
 
@@ -406,6 +427,10 @@ class _DishCard extends StatelessWidget {
   final bool busy;
   final ValueChanged<bool> onAvailabilityChanged;
   final VoidCallback onEdit;
+
+  /// Sizes, servings and choice groups — how the dish is sold.
+  final VoidCallback onConfigure;
+
   final VoidCallback onDelete;
 
   @override
@@ -511,12 +536,21 @@ class _DishCard extends StatelessWidget {
                     enabled: !busy,
                     onSelected: (action) => switch (action) {
                       _DishAction.edit => onEdit(),
+                      _DishAction.configure => onConfigure(),
                       _DishAction.delete => onDelete(),
                     },
                     itemBuilder: (context) => [
                       const PopupMenuItem<_DishAction>(
                         value: _DishAction.edit,
                         child: Text('Edit dish'),
+                      ),
+                      PopupMenuItem<_DishAction>(
+                        value: _DishAction.configure,
+                        child: Text(
+                          dish.isConfigurable
+                              ? 'Options & extras'
+                              : 'Add options & extras',
+                        ),
                       ),
                       PopupMenuItem<_DishAction>(
                         value: _DishAction.delete,

@@ -14,7 +14,12 @@ extension OrderStatusPalette on OrderStatus {
   Color foreground(BuildContext context) {
     final c = context.orderColors;
     return switch (this) {
+      // Money outstanding: the one thing on this screen staff cannot fix by
+      // cooking, so it borrows the attention colour.
+      OrderStatus.awaitingPayment => c.overdue,
       OrderStatus.placed => c.preparing,
+      OrderStatus.acceptancePending => c.preparing,
+      OrderStatus.cancellationPending => c.overdue,
       OrderStatus.preparing => c.preparing,
       OrderStatus.ready || OrderStatus.outForDelivery => c.ready,
       OrderStatus.completed => c.served,
@@ -26,7 +31,10 @@ extension OrderStatusPalette on OrderStatus {
   Color container(BuildContext context) {
     final c = context.orderColors;
     return switch (this) {
+      OrderStatus.awaitingPayment => c.overdueContainer,
       OrderStatus.placed => c.preparingContainer,
+      OrderStatus.acceptancePending => c.preparingContainer,
+      OrderStatus.cancellationPending => c.overdueContainer,
       OrderStatus.preparing => c.preparingContainer,
       OrderStatus.ready || OrderStatus.outForDelivery => c.readyContainer,
       OrderStatus.completed => c.servedContainer,

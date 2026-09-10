@@ -15,6 +15,7 @@ import '../../../shared/widgets/app_sheet.dart';
 import '../../../shared/widgets/app_surface.dart';
 import '../../../shared/widgets/skeleton.dart';
 import '../domain/customer_order.dart';
+import '../domain/order_quote.dart';
 import 'order_status_palette.dart';
 import '../../../shared/widgets/cart_icon_button.dart';
 import '../../cart/cart_cubit.dart';
@@ -691,7 +692,26 @@ void _showReceipt(BuildContext context, CustomerOrder order) {
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            Text(item.dishName, style: context.texts.bodyLarge),
+                            // Size, serving or package included: "Breakfast"
+                            // alone does not say which one was bought.
+                            Text(
+                              item.titleWithVariant,
+                              style: context.texts.bodyLarge,
+                            ),
+                            // Every option, with the server's own included /
+                            // charged split -- which is what was actually
+                            // billed, and the only version worth printing on
+                            // a receipt.
+                            for (final selection in item.selections)
+                              Text(
+                                selection.isCharged
+                                    ? '${selection.label} '
+                                          '+${OrderQuote.formatPence(selection.totalPence)}'
+                                    : selection.label,
+                                style: context.texts.bodySmall?.copyWith(
+                                  color: context.surfaces.inkSoft,
+                                ),
+                              ),
                             // Read from the order, not the dish: an admin can
                             // turn spice choices off later and this receipt must
                             // still say what was ordered.

@@ -1,5 +1,6 @@
 import 'package:practice/core/network/api_failure.dart';
 import 'package:practice/features/admin/domain/admin_menu_repository.dart';
+import 'package:practice/features/admin/domain/dish_configuration_draft.dart';
 import 'package:practice/features/menu/domain/dish.dart';
 
 /// An [AdminMenuRepository] that answers from memory and records what it was
@@ -13,6 +14,25 @@ import 'package:practice/features/menu/domain/dish.dart';
 class FakeAdminMenuRepository implements AdminMenuRepository {
   FakeAdminMenuRepository({List<MenuCategory>? categories, this.failure})
     : _categories = categories ?? [...defaultCategories];
+
+  /// Every configuration that was saved, newest last, so a test can assert on
+  /// the exact payload rather than only that the call happened.
+  final List<(String dishId, DishConfigurationDraft draft)> configurations = [];
+
+  /// What [setDishConfiguration] returns. Set it to the dish the server would
+  /// have answered with.
+  Dish? configuredDish;
+
+  @override
+  Future<Dish> setDishConfiguration(
+    String dishId,
+    DishConfigurationDraft draft,
+  ) async {
+    if (failure != null) throw failure!;
+    configurations.add((dishId, draft));
+    return configuredDish ??
+        const Dish(id: '', name: '', description: '', pricePence: 0);
+  }
 
   static const curries = MenuCategory(
     id: 'cat-1',

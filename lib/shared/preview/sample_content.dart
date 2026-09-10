@@ -123,7 +123,7 @@ abstract final class SampleContent {
     ),
   ];
 
-  static const spiceLevels = ['Mild', 'Medium', 'Hot'];
+  static const spiceLevels = ['Low', 'Mild', 'Hot'];
 
   static const addOns = [
     (

@@ -2,12 +2,39 @@ import '../../../core/network/api_client.dart';
 import '../../../core/network/api_constants.dart';
 import '../../menu/domain/dish.dart';
 import '../domain/admin_menu_repository.dart';
+import '../domain/dish_configuration_draft.dart';
 import '../../../core/network/api_failure.dart';
 
 class ApiAdminMenuRepository implements AdminMenuRepository {
   ApiAdminMenuRepository({required ApiClient client}) : _client = client;
 
   final ApiClient _client;
+
+  @override
+  Future<Dish> setDishConfiguration(
+    String dishId,
+    DishConfigurationDraft draft,
+  ) async {
+    // Refused before the round trip. The server would answer 422, but it has no
+    // way to say "two of your sizes share a code" against a particular field,
+    // and a replace that half-applies is not something to find out about after
+    // the fact.
+    final problems = draft.problems;
+    if (problems.isNotEmpty) {
+      throw ApiFailure(
+        kind: ApiFailureKind.invalid,
+        message: problems.first,
+        code: 'CONFIGURATION_INVALID',
+      );
+    }
+
+    final data = await _client.object(
+      ApiConstants.adminDishConfiguration(dishId),
+      method: 'PUT',
+      body: draft.toJson(),
+    );
+    return Dish.fromJson(data);
+  }
 
   @override
   Future<List<MenuCategory>> categories() async {

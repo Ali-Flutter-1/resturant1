@@ -686,7 +686,19 @@ class _OrderDetailState extends State<_OrderDetail> {
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              Text(line.name, style: context.texts.bodyLarge),
+                              Text(line.title, style: context.texts.bodyLarge),
+                              // What actually goes on the plate. Included and
+                              // charged options are printed alike: whether the
+                              // customer paid extra makes no difference to
+                              // cooking it, and a missing hopper is a missing
+                              // hopper.
+                              for (final choice in line.selections)
+                                Text(
+                                  choice.label,
+                                  style: context.texts.bodySmall?.copyWith(
+                                    color: context.surfaces.inkMuted,
+                                  ),
+                                ),
                               // The kitchen's instruction. Emphasised, because
                               // this is the line that gets missed.
                               if (line.notes != null)
@@ -719,7 +731,14 @@ class _OrderDetailState extends State<_OrderDetail> {
               ),
               const SizedBox(height: AppSpacing.x5),
 
-              if (order.nextStatuses.isEmpty)
+              // Money is moving at the provider. Say so plainly and offer
+              // nothing to tap: the accept or the cancel has already been
+              // recorded, and a second tap here would be a second attempt at a
+              // payment that is already in flight.
+              if (order.status.isSettling ||
+                  order.paymentStatus.isSettling) ...[
+                _SettlingNotice(order: order),
+              ] else if (order.nextStatuses.isEmpty)
                 Text(
                   'This order is ${order.status.label.toLowerCase()} and cannot '
                   'change.',
@@ -728,6 +747,13 @@ class _OrderDetailState extends State<_OrderDetail> {
                   ),
                 )
               else ...[
+                // What accepting will do to the customer's money, before the
+                // tap rather than after. Capturing a hold is not reversible by
+                // tapping again.
+                if (order.paymentStatus == PaymentStatus.authorized) ...[
+                  _CardHoldNotice(total: order.formattedTotal),
+                  const SizedBox(height: AppSpacing.x3),
+                ],
                 Text('Move it on', style: context.texts.titleMedium),
                 const SizedBox(height: AppSpacing.x2),
                 // Only the legal moves for *this* order's fulfilment type. A
@@ -746,6 +772,85 @@ class _OrderDetailState extends State<_OrderDetail> {
           ),
         );
       },
+    );
+  }
+}
+
+/// Shown while Worldpay is capturing or releasing a hold.
+class _SettlingNotice extends StatelessWidget {
+  const _SettlingNotice({required this.order});
+
+  final AdminOrder order;
+
+  @override
+  Widget build(BuildContext context) {
+    final colours = context.orderColors;
+    final releasing =
+        order.status == OrderStatus.cancellationPending ||
+        order.paymentStatus == PaymentStatus.cancelPending;
+
+    return Container(
+      padding: const EdgeInsets.all(AppSpacing.x3),
+      decoration: BoxDecoration(
+        color: colours.preparingContainer,
+        borderRadius: BorderRadius.circular(AppRadius.sm),
+      ),
+      child: Row(
+        children: [
+          SizedBox(
+            width: AppIconSize.md,
+            height: AppIconSize.md,
+            child: CircularProgressIndicator(
+              strokeWidth: 2,
+              color: colours.preparing,
+            ),
+          ),
+          const SizedBox(width: AppSpacing.x3),
+          Expanded(
+            child: Text(
+              releasing
+                  ? 'Releasing the hold on the customer\'s card. This order '
+                        'will finish cancelling on its own.'
+                  : 'Taking payment from the card. This order will move to '
+                        'preparing on its own once it clears.',
+              style: context.texts.bodySmall?.copyWith(
+                color: colours.preparing,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// What accepting an authorised card order actually does.
+class _CardHoldNotice extends StatelessWidget {
+  const _CardHoldNotice({required this.total});
+
+  final String total;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Icon(
+          Icons.credit_card_outlined,
+          size: AppIconSize.sm,
+          color: context.surfaces.inkMuted,
+        ),
+        const SizedBox(width: AppSpacing.x2),
+        Expanded(
+          child: Text(
+            'The card is authorised for $total. Accepting takes the money; '
+            'rejecting releases it. Never ask this customer to pay again.',
+            style: context.texts.bodySmall?.copyWith(
+              color: context.surfaces.inkMuted,
+            ),
+          ),
+        ),
+      ],
     );
   }
 }

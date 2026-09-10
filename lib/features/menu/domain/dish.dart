@@ -1,5 +1,9 @@
 import 'package:equatable/equatable.dart';
 
+import '../../../core/money/pence.dart';
+
+import 'dish_configuration.dart';
+
 /// One picture in a dish's gallery.
 ///
 /// Named `DishPhoto` rather than `DishImage` because the widget that draws one
@@ -36,6 +40,7 @@ class MenuCategory extends Equatable {
     this.description,
     this.imageUrl,
     this.sortOrder = 0,
+    this.parentId,
   });
 
   factory MenuCategory.fromJson(Map<String, dynamic> json) => MenuCategory(
@@ -45,6 +50,11 @@ class MenuCategory extends Equatable {
     description: json['description']?.toString(),
     imageUrl: json['image_url']?.toString(),
     sortOrder: (json['sort_order'] as num?)?.toInt() ?? 0,
+    // Null for a top-level section; set for a child of one. The menu uses it to
+    // nest Curry -> Meat Curries without a second endpoint. Filtering dishes by
+    // a parent includes its active children, so the app never has to walk the
+    // tree itself to build a category's list.
+    parentId: json['parent_id']?.toString(),
   );
 
   final String id;
@@ -58,8 +68,22 @@ class MenuCategory extends Equatable {
 
   final int sortOrder;
 
+  /// The section this one sits under, or null when it is top level.
+  final String? parentId;
+
+  /// Whether this is a top-level section rather than a child of one.
+  bool get isTopLevel => parentId == null || parentId!.isEmpty;
+
   @override
-  List<Object?> get props => [id, slug, name, description, imageUrl, sortOrder];
+  List<Object?> get props => [
+    id,
+    slug,
+    name,
+    description,
+    imageUrl,
+    sortOrder,
+    parentId,
+  ];
 }
 
 /// A dish as the public menu describes it.
@@ -89,11 +113,16 @@ class Dish extends Equatable {
     this.isAvailable = true,
     this.hasSpiceLevels = false,
     this.createdAt,
+    this.variants = const [],
+    this.optionGroups = const [],
+    this.requiresVariantSelection = false,
   });
 
   factory Dish.fromJson(Map<String, dynamic> json) {
     final images = json['images'];
     final categories = json['categories'];
+    final variants = json['variants'];
+    final optionGroups = json['option_groups'];
     return Dish(
       id: json['id']?.toString() ?? '',
       // `title` is the API's name for it. `name` is kept as a fallback so a
@@ -140,6 +169,26 @@ class Dish extends Equatable {
       createdAt: json['created_at'] == null
           ? null
           : DateTime.tryParse(json['created_at'].toString())?.toLocal(),
+      // Sorted once here so no screen has to remember to. An older deployment
+      // sends neither key, which is exactly the unconfigured dish the rest of
+      // the app already handles.
+      variants: variants is List
+          ? (variants
+                .whereType<Map>()
+                .map((v) => DishVariant.fromJson(Map<String, dynamic>.from(v)))
+                .toList()
+              ..sort((a, b) => a.sortOrder.compareTo(b.sortOrder)))
+          : const [],
+      optionGroups: optionGroups is List
+          ? (optionGroups
+                .whereType<Map>()
+                .map(
+                  (g) => DishOptionGroup.fromJson(Map<String, dynamic>.from(g)),
+                )
+                .toList()
+              ..sort((a, b) => a.sortOrder.compareTo(b.sortOrder)))
+          : const [],
+      requiresVariantSelection: json['requires_variant_selection'] == true,
     );
   }
 
@@ -181,6 +230,72 @@ class Dish extends Equatable {
   /// When the dish was added, for showing the newest first.
   final DateTime? createdAt;
 
+  /// The sizes, servings, portions or packages this dish is sold in, in
+  /// `sort_order`.
+  ///
+  /// Empty is the ordinary case and means the dish has one price: [pricePence].
+  /// Nothing here may be assumed about *what kind* of choice it is — the same
+  /// list carries "14-inch", "Bottle" and "6 Items", and inventing labels like
+  /// Small/Medium/Large would put words on the menu the admin never wrote.
+  final List<DishVariant> variants;
+
+  /// Every group of choices the dish defines. Which of them apply depends on
+  /// the selected variant, so read them through `DishSelection.groups` rather
+  /// than rendering this list directly.
+  final List<DishOptionGroup> optionGroups;
+
+  /// Whether the size/serving choice should read as required.
+  ///
+  /// Presentation only — the app still pre-selects the default variant so the
+  /// screen opens on a price, and this makes the selector look like a decision
+  /// rather than a detail.
+  final bool requiresVariantSelection;
+
+  /// Whether this dish is sold in more than one form at all.
+  bool get isConfigurable => variants.isNotEmpty || optionGroups.isNotEmpty;
+
+  /// The variant the screen should open on: the default, else the first that
+  /// can be bought, else the first that exists.
+  DishVariant? get defaultVariant {
+    if (variants.isEmpty) return null;
+    for (final variant in variants) {
+      if (variant.isDefault && variant.isAvailable) return variant;
+    }
+    for (final variant in variants) {
+      if (variant.isAvailable) return variant;
+    }
+    return variants.first;
+  }
+
+  /// The cheapest price a customer could pay, for a card that has to show one
+  /// number. Falls back to [pricePence] for an unconfigured dish.
+  int get fromPricePence {
+    final sellable = [
+      for (final variant in variants)
+        if (variant.isAvailable) variant.pricePence,
+    ];
+    if (sellable.isEmpty) return pricePence;
+    return sellable.reduce((a, b) => a < b ? a : b);
+  }
+
+  /// Whether a card should say "from £x" rather than a flat price — true only
+  /// when the variants actually differ in price.
+  bool get hasPriceRange {
+    final sellable = [
+      for (final variant in variants)
+        if (variant.isAvailable) variant.pricePence,
+    ];
+    if (sellable.length < 2) return false;
+    return sellable.any((price) => price != sellable.first);
+  }
+
+  DishOptionGroup? optionGroupById(String id) {
+    for (final group in optionGroups) {
+      if (group.id == id) return group;
+    }
+    return null;
+  }
+
   /// The picture to draw. The API's `image_url` first, then the gallery's first
   /// entry, which is the one it treats as primary.
   String? get imageUrl {
@@ -202,7 +317,13 @@ class Dish extends Equatable {
 
   double get price => pricePence / 100;
 
-  String get formattedPrice => '£${price.toStringAsFixed(2)}';
+  /// The price for a card.
+  ///
+  /// "from £12.50" where the variants differ, because a single number beside a
+  /// pizza sold in three sizes is a number the customer will not be charged.
+  String get formattedPrice => hasPriceRange
+      ? 'from ${formatPence(fromPricePence)}'
+      : formatPence(fromPricePence);
 
   /// The single badge worth showing on a card. Vegan is the stronger claim, so
   /// it wins over vegetarian; a dish with neither shows nothing rather than an
@@ -233,5 +354,8 @@ class Dish extends Equatable {
     isAvailable,
     hasSpiceLevels,
     createdAt,
+    variants,
+    optionGroups,
+    requiresVariantSelection,
   ];
 }

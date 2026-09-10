@@ -6,10 +6,26 @@ import 'package:equatable/equatable.dart';
 /// integration guide is explicit that an older app must not crash on a status it
 /// has never heard of, and that the raw value should survive for logging.
 enum OrderStatus {
+  awaitingPayment(
+    'awaiting_payment',
+    'Awaiting payment',
+    'Waiting for payment',
+  ),
   placed('placed', 'Placed', 'Order received'),
+
+  /// Accepted, and the card hold is being turned into a charge. The provider
+  /// drives this; staff have nothing to do but wait, so no move leads out of it.
+  acceptancePending('acceptance_pending', 'Confirming payment', 'Confirming'),
   preparing('preparing', 'Preparing', 'Being prepared'),
   ready('ready', 'Ready', 'Ready'),
   outForDelivery('out_for_delivery', 'Out for delivery', 'On its way'),
+
+  /// Cancelled or rejected, with the card hold being released.
+  cancellationPending(
+    'cancellation_pending',
+    'Releasing payment',
+    'Cancelling',
+  ),
   completed('completed', 'Completed', 'Completed'),
   cancelled('cancelled', 'Cancelled', 'Cancelled'),
   rejected('rejected', 'Rejected', 'Rejected by the restaurant'),
@@ -40,6 +56,14 @@ enum OrderStatus {
 
   /// Still in the kitchen's hands — what `open_only=true` returns.
   bool get isOpen => !isFinal && this != unknown;
+
+  /// Whether the payment provider is mid-operation on this order.
+  ///
+  /// Staff decisions are locked while it is true: the accept has already been
+  /// recorded and the capture is in flight, so a second tap would be a second
+  /// attempt at money that is already moving.
+  bool get isSettling =>
+      this == acceptancePending || this == cancellationPending;
 }
 
 /// Whether an order is collected or delivered.
@@ -60,10 +84,20 @@ enum FulfilmentType {
       raw?.trim().toLowerCase() == 'collection' ? collection : delivery;
 }
 
-/// Cash only for now — the API rejects `card` with `CARD_PAYMENT_UNAVAILABLE`.
+/// Where the money is, as staff need to read it.
+///
+/// A card order arrives *authorised*, not paid: the hold becomes a charge only
+/// when staff accept. The labels say so, because "Unpaid" on an authorised card
+/// order would make a kitchen chase money that is already ringfenced.
 enum PaymentStatus {
   pending('pending', 'Unpaid'),
+  authorized('authorized', 'Card authorised'),
+  capturePending('capture_pending', 'Taking payment'),
+  captured('captured', 'Paid by card'),
   paid('paid', 'Paid'),
+  cancelPending('cancel_pending', 'Releasing hold'),
+  cancelled('cancelled', 'Hold released'),
+  failed('failed', 'Card declined'),
   refunded('refunded', 'Refunded');
 
   const PaymentStatus(this.wire, this.label);
@@ -73,10 +107,26 @@ enum PaymentStatus {
 
   static PaymentStatus fromApi(String? raw) =>
       switch (raw?.trim().toLowerCase()) {
+        'authorized' || 'authorised' => authorized,
+        'capture_pending' || 'capturing' => capturePending,
+        'captured' => captured,
         'paid' => paid,
+        'cancel_pending' || 'cancelling' || 'releasing' => cancelPending,
+        'cancelled' || 'canceled' || 'voided' || 'released' => cancelled,
+        'failed' || 'declined' || 'refused' => failed,
         'refunded' => refunded,
         _ => pending,
       };
+
+  /// Whether the provider is mid-operation. Staff controls are disabled while
+  /// this is true so one tap cannot become two capture attempts.
+  bool get isSettling => this == capturePending || this == cancelPending;
+
+  /// Whether the restaurant is holding the customer's money.
+  bool get isCommitted => switch (this) {
+    authorized || capturePending || captured || paid => true,
+    pending || cancelPending || cancelled || failed || refunded => false,
+  };
 }
 
 /// The documented state machine.
@@ -93,11 +143,24 @@ enum PaymentStatus {
 abstract final class OrderTransitions {
   static List<OrderStatus> nextFor(OrderStatus status, FulfilmentType type) =>
       switch (status) {
+        // An unpaid card order is not the kitchen's yet. Staff can refuse it,
+        // but they cannot start cooking something nobody has paid for.
+        OrderStatus.awaitingPayment => [
+          OrderStatus.rejected,
+          OrderStatus.cancelled,
+        ],
         OrderStatus.placed => [
+          // Accepting a card order captures the hold; the backend moves it
+          // through acceptance_pending on the way to preparing.
           OrderStatus.preparing,
           OrderStatus.rejected,
           OrderStatus.cancelled,
         ],
+        // Nothing leads out of a provider operation. The backend advances the
+        // order when Worldpay answers, and offering a button here is how one
+        // accept becomes two capture attempts.
+        OrderStatus.acceptancePending ||
+        OrderStatus.cancellationPending => const [],
         OrderStatus.preparing => [OrderStatus.ready, OrderStatus.cancelled],
         OrderStatus.ready => [
           // The one place the two paths differ. Collection cannot enter
@@ -123,6 +186,33 @@ abstract final class OrderTransitions {
       nextFor(from, type).contains(next);
 }
 
+/// One chosen option on a kitchen ticket.
+///
+/// No prices. Staff making the food need to know what to put on the plate, and
+/// whether an item was inside the customer's allowance or charged extra makes
+/// no difference to cooking it.
+class AdminLineSelection extends Equatable {
+  const AdminLineSelection({required this.name, required this.quantity});
+
+  factory AdminLineSelection.fromJson(Map<String, dynamic> json) =>
+      AdminLineSelection(
+        name:
+            json['option_name']?.toString() ??
+            json['name']?.toString() ??
+            'Option',
+        quantity: (json['quantity'] as num?)?.toInt() ?? 1,
+      );
+
+  final String name;
+  final int quantity;
+
+  /// "4x Egg Hopper" or "Egg Hopper".
+  String get label => quantity > 1 ? '$quantity x $name' : name;
+
+  @override
+  List<Object?> get props => [name, quantity];
+}
+
 /// One line of an order, as the kitchen reads it.
 class AdminOrderLine extends Equatable {
   const AdminOrderLine({
@@ -130,18 +220,35 @@ class AdminOrderLine extends Equatable {
     required this.quantity,
     required this.linePence,
     this.notes,
+    this.variantName,
+    this.selections = const [],
   });
 
-  factory AdminOrderLine.fromJson(Map<String, dynamic> json) => AdminOrderLine(
-    // A snapshot taken at purchase, not a join to the menu — a dish can be
-    // renamed or deleted and an old ticket must still say what was bought.
-    name: json['name']?.toString() ?? 'Item',
-    quantity: (json['quantity'] as num?)?.toInt() ?? 1,
-    linePence: (json['line_total_pence'] as num?)?.toInt() ?? 0,
-    notes: (json['notes']?.toString().trim().isEmpty ?? true)
-        ? null
-        : json['notes'].toString().trim(),
-  );
+  factory AdminOrderLine.fromJson(Map<String, dynamic> json) {
+    final selections = json['selections'];
+    return AdminOrderLine(
+      // A snapshot taken at purchase, not a join to the menu — a dish can be
+      // renamed or deleted and an old ticket must still say what was bought.
+      name: json['name']?.toString() ?? 'Item',
+      quantity: (json['quantity'] as num?)?.toInt() ?? 1,
+      linePence: (json['line_total_pence'] as num?)?.toInt() ?? 0,
+      notes: (json['notes']?.toString().trim().isEmpty ?? true)
+          ? null
+          : json['notes'].toString().trim(),
+      variantName: (json['variant_name']?.toString().trim().isEmpty ?? true)
+          ? null
+          : json['variant_name'].toString().trim(),
+      selections: selections is List
+          ? selections
+                .whereType<Map>()
+                .map(
+                  (s) =>
+                      AdminLineSelection.fromJson(Map<String, dynamic>.from(s)),
+                )
+                .toList()
+          : const [],
+    );
+  }
 
   final String name;
   final int quantity;
@@ -150,8 +257,26 @@ class AdminOrderLine extends Equatable {
   /// What the customer asked for on this line. The kitchen needs it.
   final String? notes;
 
+  /// The size, serving or package ordered — "6 Items", "14-inch".
+  final String? variantName;
+
+  /// Every option chosen. The kitchen cooks from this, so unlike the customer's
+  /// receipt it keeps the *included* ones too: an egg hopper that cost nothing
+  /// still has to be made.
+  final List<AdminLineSelection> selections;
+
+  /// The dish and its variant on one line, for the ticket heading.
+  String get title => variantName == null ? name : '$name ($variantName)';
+
   @override
-  List<Object?> get props => [name, quantity, linePence, notes];
+  List<Object?> get props => [
+    name,
+    quantity,
+    linePence,
+    notes,
+    variantName,
+    selections,
+  ];
 }
 
 /// An order in the staff queue.

@@ -235,16 +235,17 @@ void main() {
       await tester.pumpWidget(wrap(wrapDish(dish: _spiced)));
       await tester.pumpAndSettle();
 
-      await tester.scrollUntilVisible(find.text('High'), 200);
+      await tester.scrollUntilVisible(find.text('Hot'), 200);
       await tester.pumpAndSettle();
-      await tester.tap(find.text('High'));
+      await tester.tap(find.text('Hot'));
       await tester.pumpAndSettle();
 
       // All three remain on screen; only the styling differs, so the check is
-      // that selecting one does not remove the others.
+      // that selecting one does not remove the others. The menu's wording is
+      // Low / Mild / Hot.
       expect(find.text('Low'), findsOneWidget);
-      expect(find.text('Mid'), findsOneWidget);
-      expect(find.text('High'), findsOneWidget);
+      expect(find.text('Mild'), findsOneWidget);
+      expect(find.text('Hot'), findsOneWidget);
     });
 
     testWidgets('the chosen level reaches the basket as its own field', (
@@ -262,9 +263,9 @@ void main() {
       );
       await tester.pumpAndSettle();
 
-      await tester.scrollUntilVisible(find.text('Mid'), 200);
+      await tester.scrollUntilVisible(find.text('Mild'), 200);
       await tester.pumpAndSettle();
-      await tester.tap(find.text('Mid'));
+      await tester.tap(find.text('Mild'));
       await tester.pumpAndSettle();
 
       await tester.scrollUntilVisible(find.text('ADD TO CART'), -200);
@@ -275,8 +276,12 @@ void main() {
       expect(line.spiceLevel, SpiceLevel.mid);
       // Its own field, not smuggled into the free-text note — a note the
       // kitchen reads is not something a report can count.
+      //
+      // The menu says Mild and the wire says `mid`: the label is the
+      // restaurant's wording, the value is the backend's contract, and
+      // renaming the latter to match would break every stored order.
       expect(line.toJson()['spice_level'], 'mid');
-      expect(line.notes ?? '', isNot(contains('Mid')));
+      expect(line.notes ?? '', isNot(contains('Mild')));
     });
 
     test('a level is dropped for a dish that does not offer one', () {

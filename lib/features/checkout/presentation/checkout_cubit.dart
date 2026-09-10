@@ -8,6 +8,7 @@ import '../../../core/network/api_failure.dart';
 import '../../cart/cart_cubit.dart';
 import '../../orders/domain/customer_order.dart';
 import '../../orders/domain/order_quote.dart';
+import '../../orders/domain/menu_staleness.dart';
 import '../../orders/domain/order_repository.dart';
 import '../../delivery/domain/delivery_zone.dart';
 import '../../delivery/domain/delivery_zone_repository.dart';
@@ -27,6 +28,7 @@ class CheckoutState extends Equatable {
     this.failure,
     this.placedOrder,
     this.fieldErrors = const {},
+    this.staleMenuNotice,
     this.requestedFor,
     this.prepMinutes,
     this.paymentMethod = PaymentMethod.cash,
@@ -79,6 +81,11 @@ class CheckoutState extends Equatable {
       isDelivery && zoneCheck != null && !zoneCheck!.deliverable;
 
   final ApiFailure? failure;
+
+  /// What the app did about a stale-menu rejection — "It has been removed from
+  /// your basket." Shown under the server's own message, because the server has
+  /// no way to know what the app did next.
+  final String? staleMenuNotice;
 
   /// Set once the order exists. Its number is what the customer needs.
   final CustomerOrder? placedOrder;
@@ -150,6 +157,8 @@ class CheckoutState extends Equatable {
     bool? isDelivery,
     OrderQuote? quote,
     ApiFailure? failure,
+    String? staleMenuNotice,
+    bool clearStaleNotice = false,
     CustomerOrder? placedOrder,
     Map<String, String>? fieldErrors,
     String? requestedFor,
@@ -170,6 +179,9 @@ class CheckoutState extends Equatable {
       isDelivery: isDelivery ?? this.isDelivery,
       quote: quote ?? this.quote,
       failure: clearFailure ? null : (failure ?? this.failure),
+      staleMenuNotice: clearStaleNotice
+          ? null
+          : (staleMenuNotice ?? this.staleMenuNotice),
       placedOrder: placedOrder ?? this.placedOrder,
       fieldErrors: fieldErrors ?? this.fieldErrors,
       requestedFor: clearSlot ? null : (requestedFor ?? this.requestedFor),
@@ -191,6 +203,7 @@ class CheckoutState extends Equatable {
     isDelivery,
     quote,
     failure,
+    staleMenuNotice,
     placedOrder,
     paymentMethod,
     paying,
@@ -390,8 +403,45 @@ class CheckoutCubit extends Cubit<CheckoutState> {
       );
     } on ApiFailure catch (failure) {
       if (ticket != _quoteTicket) return;
-      emit(state.copyWith(stage: CheckoutStage.failed, failure: failure));
+      final notice = _repairStaleBasket(failure);
+      emit(
+        state.copyWith(
+          stage: CheckoutStage.failed,
+          failure: failure,
+          staleMenuNotice: notice,
+          clearStaleNotice: notice == null,
+        ),
+      );
     }
+  }
+
+  /// Reacts to a rejection that names the menu.
+  ///
+  /// The guide is explicit that a stale payload must not be resent unchanged.
+  /// Where the dish itself has gone the line is dropped, which both fixes the
+  /// basket and means the next quote is a different request rather than the
+  /// same one bounced again. Where only a size or an option is stale the line
+  /// stays -- the customer chose the dish deliberately and should re-pick from
+  /// the refreshed menu rather than have it silently vanish.
+  ///
+  /// Returns the sentence to show, or null when the failure is not about the
+  /// menu at all.
+  String? _repairStaleBasket(ApiFailure failure) {
+    final staleness = MenuStaleness.of(failure);
+    if (staleness == MenuStaleness.none) return null;
+
+    if (staleness.dropsLine) {
+      // Which dish is in `error.details`, keyed by field. Without an id there
+      // is nothing safe to remove -- dropping a guess would delete the wrong
+      // meal -- so the message stands alone and the customer edits the basket.
+      final dishId = failure.fieldErrors['dish_id'];
+      if (dishId != null) {
+        for (final line in List.of(_cart.state.lines)) {
+          if (line.dishId == dishId) _cart.remove(line);
+        }
+      }
+    }
+    return staleness.recovery;
   }
 
   /// Opens the payment page for the order just placed, then asks the server
@@ -496,6 +546,7 @@ class CheckoutCubit extends Cubit<CheckoutState> {
       if (order.needsPayment) await payNow();
       return null;
     } on ApiFailure catch (failure) {
+      final notice = _repairStaleBasket(failure);
       // Back to ready, not failed: the entered details are still on screen and
       // still valid, and most of these are worth another try with the same key.
       emit(
@@ -503,8 +554,14 @@ class CheckoutCubit extends Cubit<CheckoutState> {
           stage: CheckoutStage.ready,
           failure: failure,
           fieldErrors: failure.fieldErrors,
+          staleMenuNotice: notice,
+          clearStaleNotice: notice == null,
         ),
       );
+      // A stale basket has changed, so it must be re-priced before it can be
+      // sent again -- the totals on screen were quoted for something the server
+      // has just refused.
+      if (notice != null) quoteSoon();
       return failure;
     }
   }

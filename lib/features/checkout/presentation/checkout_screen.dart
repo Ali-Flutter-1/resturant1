@@ -72,6 +72,8 @@ class _CheckoutViewState extends State<_CheckoutView> {
 
   Map<String, String> _localErrors = const {};
 
+  AppLifecycleListener? _lifecycle;
+
   @override
   void initState() {
     super.initState();
@@ -79,10 +81,30 @@ class _CheckoutViewState extends State<_CheckoutView> {
     // app they are signed into is a form they have already filled in.
     final user = context.read<AuthCubit>().state.user;
     if (user != null) _name.text = user.displayName;
+
+    // A quote goes stale while the app is in the background: an admin can
+    // change a price, a dish can sell out, and a delivery slot can pass. The
+    // totals on screen are what the customer believes they are agreeing to, so
+    // coming back re-prices before they can tap Place order on a figure the
+    // server would no longer honour.
+    _lifecycle = AppLifecycleListener(
+      onResume: () {
+        if (!mounted) return;
+        final cubit = context.read<CheckoutCubit>();
+        // Not while the order is being sent or has been placed -- re-quoting
+        // there would either race the submission or re-price a finished order.
+        if (cubit.state.stage == CheckoutStage.submitting ||
+            cubit.state.stage == CheckoutStage.placed) {
+          return;
+        }
+        cubit.quoteSoon();
+      },
+    );
   }
 
   @override
   void dispose() {
+    _lifecycle?.dispose();
     for (final c in [
       _name,
       _phone,
@@ -210,6 +232,16 @@ class _CheckoutViewState extends State<_CheckoutView> {
                     bottom: AppSpacing.x12,
                   ),
                   children: [
+                    // A menu that changed under the customer. Above everything,
+                    // because it explains why the basket or the total is not
+                    // what they left it as.
+                    if (state.staleMenuNotice != null) ...[
+                      _StaleMenuBanner(
+                        message: state.failure?.message,
+                        recovery: state.staleMenuNotice!,
+                      ),
+                      const SizedBox(height: AppSpacing.x4),
+                    ],
                     _MethodPicker(
                       isDelivery: state.isDelivery,
                       busy: state.stage == CheckoutStage.quoting,
@@ -747,11 +779,15 @@ class _QuotePanel extends StatelessWidget {
 
   /// The priced line for a basket line, matched on what the API echoes back.
   ///
-  /// `dish_id` plus the note and spice level, because the same dish can appear
-  /// twice with different instructions and those are genuinely separate lines.
+  /// `dish_id` and `variant_id` plus the note and spice level, because the same
+  /// dish can appear several times with different instructions or different
+  /// configurations and those are genuinely separate lines. Without the variant
+  /// a basket holding a 12-inch and a 16-inch of one pizza would show the same
+  /// price against both.
   QuoteLine? _pricedFor(CartLine line) {
     for (final priced in quote?.lines ?? const <QuoteLine>[]) {
       if (priced.dishId == line.dishId &&
+          priced.variantId == line.variantId &&
           priced.notes == line.notes &&
           priced.spiceLevel == line.spiceLevel) {
         return priced;
@@ -786,6 +822,7 @@ class _QuotePanel extends StatelessWidget {
           for (final line in lines) ...[
             _BasketRow(
               line: line,
+              priced: _pricedFor(line),
               pricePence: _pricedFor(line)?.linePence ?? line.displayLinePence,
               onChangeQuantity: (quantity) => onChangeQuantity(line, quantity),
             ),
@@ -1142,9 +1179,17 @@ class _BasketRow extends StatelessWidget {
     required this.line,
     required this.pricePence,
     required this.onChangeQuantity,
+    this.priced,
   });
 
   final CartLine line;
+
+  /// The server's version of this line, once a quote has come back. Its
+  /// breakdown wins over the basket's cached one — the guide is explicit that
+  /// the quote's selection data is what the wording should come from, because
+  /// it is the split that was actually billed.
+  final QuoteLine? priced;
+
   final int pricePence;
   final ValueChanged<int> onChangeQuantity;
 
@@ -1188,6 +1233,15 @@ class _BasketRow extends StatelessWidget {
       if (line.notes != null) line.notes!,
     ].join(' · ');
 
+    // The variant belongs in the title -- "Custom Breakfast (6 Items)" is one
+    // thing bought, not a thing plus a footnote.
+    final title = priced?.titleWithVariant ?? line.titleWithVariant;
+
+    // Every chosen option, with the ones that cost extra priced. Falls back to
+    // the basket's cached summary until the first quote lands, so the row is
+    // never blank about what was configured.
+    final selections = priced?.selections ?? const <QuoteSelection>[];
+
     return Row(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -1195,7 +1249,17 @@ class _BasketRow extends StatelessWidget {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text(line.title, style: context.texts.bodyLarge),
+              Text(title, style: context.texts.bodyLarge),
+              if (selections.isNotEmpty)
+                for (final selection in selections)
+                  _SelectionLine(selection: selection)
+              else if (line.selectionSummary != null)
+                Text(
+                  line.selectionSummary!,
+                  style: context.texts.bodySmall?.copyWith(
+                    color: context.surfaces.inkSoft,
+                  ),
+                ),
               if (detail.isNotEmpty)
                 Text(
                   detail,
@@ -1249,6 +1313,89 @@ class _BasketRow extends StatelessWidget {
           style: context.texts.bodyLarge,
         ),
       ],
+    );
+  }
+}
+
+/// Says that the menu changed while the customer was shopping.
+///
+/// Two sentences on purpose: the server's own message says what went wrong —
+/// it knows which dish and why — and the recovery line says what the app did
+/// about it, which the server cannot know.
+class _StaleMenuBanner extends StatelessWidget {
+  const _StaleMenuBanner({required this.recovery, this.message});
+
+  final String? message;
+  final String recovery;
+
+  @override
+  Widget build(BuildContext context) {
+    final colours = context.orderColors;
+
+    return Container(
+      padding: const EdgeInsets.all(AppSpacing.x3),
+      decoration: BoxDecoration(
+        color: colours.preparingContainer,
+        borderRadius: BorderRadius.circular(AppRadius.sm),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(
+            Icons.restaurant_menu_outlined,
+            size: AppIconSize.md,
+            color: colours.preparing,
+          ),
+          const SizedBox(width: AppSpacing.x2),
+          Expanded(
+            child: Text(
+              [
+                if (message != null && message!.trim().isNotEmpty) message!,
+                recovery,
+              ].join(' '),
+              style: context.texts.bodySmall?.copyWith(
+                color: colours.preparing,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// One chosen option under a basket line.
+///
+/// An included option is named and left unpriced; a charged one carries its
+/// own amount. That contrast is the whole explanation of a 6-item breakfast
+/// costing more than £11.95, and it is worth two words per row to make it.
+class _SelectionLine extends StatelessWidget {
+  const _SelectionLine({required this.selection});
+
+  final QuoteSelection selection;
+
+  @override
+  Widget build(BuildContext context) {
+    final muted = context.texts.bodySmall?.copyWith(
+      color: context.surfaces.inkSoft,
+    );
+
+    return Padding(
+      padding: const EdgeInsets.only(top: 1),
+      child: Row(
+        children: [
+          Expanded(child: Text(selection.label, style: muted)),
+          if (selection.isCharged) ...[
+            const SizedBox(width: AppSpacing.x2),
+            Text(
+              // Only the charged part. An option with 2 included and 1 extra
+              // shows the price of the one extra, which is what was billed.
+              '+${OrderQuote.formatPence(selection.totalPence)}',
+              style: muted,
+            ),
+          ],
+        ],
+      ),
     );
   }
 }
