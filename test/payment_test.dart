@@ -33,19 +33,30 @@ void main() {
     },
   );
 
-  Future<CustomerOrder> placeCardOrder() => repository.place(
-    idempotencyKey: 'key-1',
-    isDelivery: false,
-    lines: const [],
-    contactName: 'Ali',
-    contactPhone: '07700 900123',
-    paymentMethod: PaymentMethod.card,
-  );
+  /// Places a card order and approves it, which is what makes it payable.
+  ///
+  /// Approval is its own step now, so every payment test has to get past it.
+  /// Done here rather than in each test because these tests are about what
+  /// happens at the payment page, not about the restaurant's decision -- that
+  /// is covered on its own above.
+  Future<CustomerOrder> placeCardOrder() async {
+    final order = await repository.place(
+      idempotencyKey: 'key-1',
+      isDelivery: false,
+      lines: const [],
+      contactName: 'Ali',
+      contactPhone: '07700 900123',
+      paymentMethod: PaymentMethod.card,
+    );
+    repository.approve(order.id);
+    return repository.orders.firstWhere((o) => o.id == order.id);
+  }
 
   group('the order model', () {
-    test('a card order that is not paid still owes money', () {
+    test('an approved, unpaid card order owes money', () {
       final order = CustomerOrder.fromJson(const {
         'id': '1',
+        'status': 'awaiting_payment',
         'payment_method': 'card',
         'payment_status': 'pending',
         'payment_url': 'https://hpp-sandbox.worldpay.com/x',
@@ -54,6 +65,51 @@ void main() {
       expect(order.isCard, isTrue);
       expect(order.needsPayment, isTrue);
       expect(order.awaitingPayment, isTrue);
+      expect(order.awaitingApproval, isFalse);
+    });
+
+    test('a brand new order is not payable until the restaurant approves', () {
+      final order = CustomerOrder.fromJson(const {
+        'id': '1',
+        'status': 'pending_approval',
+        'payment_method': 'card',
+        'payment_status': 'pending',
+      });
+
+      // Every order now starts here. Asking for a page at this point comes
+      // back as ORDER_NOT_APPROVED, so there must be no Pay button to tap.
+      expect(order.awaitingApproval, isTrue);
+      expect(order.needsPayment, isFalse);
+      expect(order.statusLabel, 'Waiting for approval');
+      expect(order.statusExplanation, contains('approve'));
+      expect(order.statusExplanation, isNot(contains('kitchen')));
+    });
+
+    test('a cash order waits for approval too, and never offers payment', () {
+      final order = CustomerOrder.fromJson(const {
+        'id': '1',
+        'status': 'pending_approval',
+        'payment_method': 'cash',
+        'payment_status': 'pending',
+      });
+
+      expect(order.awaitingApproval, isTrue);
+      expect(order.needsPayment, isFalse);
+      expect(order.statusLabel, 'Waiting for approval');
+    });
+
+    test('an approved cash order is with the kitchen', () {
+      final order = CustomerOrder.fromJson(const {
+        'id': '1',
+        'status': 'placed',
+        'payment_method': 'cash',
+        'payment_status': 'pending',
+      });
+
+      expect(order.awaitingApproval, isFalse);
+      expect(order.needsPayment, isFalse);
+      expect(order.statusLabel, 'Order confirmed');
+      expect(order.statusExplanation, contains('kitchen'));
     });
 
     test('a refunded order is not asked to pay again', () {
@@ -82,17 +138,17 @@ void main() {
     test('an unpaid card order is never described as being cooked', () {
       final order = CustomerOrder.fromJson(const {
         'id': '1',
-        'status': 'placed',
+        'status': 'awaiting_payment',
         'payment_method': 'card',
         'payment_status': 'pending',
       });
 
       // The backend holds it out of the kitchen until the webhook lands, so
       // the placed-order copy would be a lie the customer acts on.
-      expect(order.statusLabel, 'Awaiting payment');
+      expect(order.statusLabel, 'Payment needed');
       expect(
         order.statusExplanation,
-        'Complete payment to confirm your order.',
+        'Approved. Complete payment to submit your order.',
       );
       expect(order.statusExplanation, isNot(contains('kitchen')));
     });
@@ -100,13 +156,26 @@ void main() {
     test('a declined card says so, and keeps the order', () {
       final order = CustomerOrder.fromJson(const {
         'id': '1',
-        'status': 'placed',
+        'status': 'awaiting_payment',
         'payment_method': 'card',
         'payment_status': 'failed',
       });
 
       expect(order.statusLabel, 'Payment declined');
       expect(order.needsPayment, isTrue);
+    });
+
+    test('a declined card on an unapproved order is still not payable', () {
+      // Belt and braces: the status gate wins over the payment gate, so a
+      // stale `failed` on an order awaiting approval cannot resurrect Pay.
+      final order = CustomerOrder.fromJson(const {
+        'id': '1',
+        'status': 'pending_approval',
+        'payment_method': 'card',
+        'payment_status': 'failed',
+      });
+
+      expect(order.needsPayment, isFalse);
     });
 
     test('a paid card order reads like any confirmed order', () {
@@ -122,6 +191,116 @@ void main() {
       expect(order.statusLabel, 'Being prepared');
       expect(order.paidAt, isNotNull);
     });
+  });
+
+  group('the approval step', () {
+    test('a new order is not payable and offers no page', () async {
+      final order = await repository.place(
+        idempotencyKey: 'key-1',
+        isDelivery: false,
+        lines: const [],
+        contactName: 'Ali',
+        contactPhone: '07700 900123',
+        paymentMethod: PaymentMethod.card,
+      );
+
+      // The whole point of the change: nothing is payable until a human at the
+      // restaurant has said yes.
+      expect(order.status, CustomerOrderStatus.pendingApproval);
+      expect(order.paymentUrl, isNull);
+      expect(order.needsPayment, isFalse);
+    });
+
+    test(
+      'paying before approval is refused without calling the server',
+      () async {
+        final order = await repository.place(
+          idempotencyKey: 'key-1',
+          isDelivery: false,
+          lines: const [],
+          contactName: 'Ali',
+          contactPhone: '07700 900123',
+          paymentMethod: PaymentMethod.card,
+        );
+        final payCallsBefore = repository.payCalls;
+
+        await expectLater(
+          flowFor(settleAs: CustomerPaymentStatus.paid).payFor(order),
+          throwsA(
+            isA<ApiFailure>().having(
+              (f) => f.code,
+              'code',
+              'ORDER_NOT_APPROVED',
+            ),
+          ),
+        );
+        // Refused locally: the backend would answer the same way, and a request
+        // we already know the answer to is one not worth making.
+        expect(repository.payCalls, payCallsBefore);
+      },
+    );
+
+    test('approval makes a card order payable', () async {
+      final order = await placeCardOrder();
+
+      expect(order.status, CustomerOrderStatus.awaitingPayment);
+      expect(order.needsPayment, isTrue);
+      expect(order.paymentUrl, isNotNull);
+    });
+
+    test('approval sends a cash order straight to the kitchen', () async {
+      final placed = await repository.place(
+        idempotencyKey: 'key-2',
+        isDelivery: false,
+        lines: const [],
+        contactName: 'Ali',
+        contactPhone: '07700 900123',
+      );
+      expect(placed.status, CustomerOrderStatus.pendingApproval);
+
+      repository.approve(placed.id);
+      final approved = repository.orders.firstWhere((o) => o.id == placed.id);
+
+      expect(approved.status, CustomerOrderStatus.placed);
+      expect(approved.needsPayment, isFalse);
+      expect(approved.paymentUrl, isNull);
+    });
+  });
+
+  group('cancelling', () {
+    CustomerOrder at(String status, {bool? canCancel}) =>
+        CustomerOrder.fromJson({
+          'id': '1',
+          'status': status,
+          'payment_method': 'card',
+          'payment_status': 'pending',
+          'can_cancel': ?canCancel,
+        });
+
+    test('the server flag is what decides', () {
+      // The guide says to use `can_cancel` rather than reproducing the rule,
+      // because the server knows things the app cannot.
+      expect(at('placed', canCancel: false).canCancel, isFalse);
+      expect(at('preparing', canCancel: true).canCancel, isTrue);
+    });
+
+    test('an order waiting for approval can still be cancelled', () {
+      // This is the regression the approval step introduced: an order now
+      // starts here and can sit here for minutes, and the old rule -- cancel
+      // only while `placed` -- took the button away for that whole window.
+      expect(at('pending_approval').canCancel, isTrue);
+      expect(at('awaiting_payment').canCancel, isTrue);
+      expect(at('placed').canCancel, isTrue);
+    });
+
+    test(
+      'cooking has started, so it is a conversation rather than a button',
+      () {
+        for (final status in ['preparing', 'ready', 'completed', 'cancelled']) {
+          expect(at(status).canCancel, isFalse, reason: status);
+        }
+      },
+    );
   });
 
   group('the payment flow', () {

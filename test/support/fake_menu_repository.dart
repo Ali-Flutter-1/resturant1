@@ -1,4 +1,5 @@
 import 'package:practice/core/network/api_failure.dart';
+import 'package:practice/core/network/page_data.dart';
 import 'package:practice/features/menu/domain/dish.dart';
 import 'package:practice/features/menu/domain/menu_repository.dart';
 
@@ -93,8 +94,13 @@ class FakeMenuRepository implements MenuRepository {
   Future<List<MenuCategory>> categories() => _answer(_categories);
 
   @override
-  Future<List<Dish>> dishes({String? categorySlug}) => _answer(
-    categorySlug == null
+  Future<PageData<Dish>> dishes({
+    String? categorySlug,
+    int page = 1,
+    int pageSize = 40,
+  }) {
+    lastPageAsked = page;
+    final rows = categorySlug == null
         ? _dishes
         : _dishes
               .where(
@@ -107,8 +113,27 @@ class FakeMenuRepository implements MenuRepository {
                       .id,
                 ),
               )
-              .toList(),
-  );
+              .toList();
+    return _answer(_slice(rows, page, pageSize));
+  }
+
+  /// The page number of the last request.
+  int? lastPageAsked;
+
+  /// A real slice, so a pagination test tests pagination rather than a fake
+  /// that returns everything whatever page it is asked for.
+  static PageData<Dish> _slice(List<Dish> rows, int page, int pageSize) {
+    final start = (page - 1) * pageSize;
+    return PageData(
+      items: start >= rows.length
+          ? const []
+          : rows.sublist(start, (start + pageSize).clamp(0, rows.length)),
+      page: page,
+      pageSize: pageSize,
+      total: rows.length,
+      totalPages: (rows.length / pageSize).ceil(),
+    );
+  }
 
   @override
   Future<Dish> dishById(String id) =>

@@ -12,6 +12,9 @@ class MenuState extends Equatable {
     this.status = MenuStatus.loading,
     this.categories = const [],
     this.dishes = const [],
+    this.page = 1,
+    this.totalPages = 0,
+    this.loadingMore = false,
     this.failure,
     this.categorySlug,
     this.query = '',
@@ -26,6 +29,16 @@ class MenuState extends Equatable {
   /// Everything live, unfiltered. Filtering is a view concern — see [visible] —
   /// so switching a chip doesn't cost a round trip or a loading flicker.
   final List<Dish> dishes;
+
+  /// The last page fetched and how many there are.
+  ///
+  /// An endpoint that does not paginate answers as a single complete page, so
+  /// [hasMore] is false and nothing offers to fetch a second one.
+  final int page;
+  final int totalPages;
+  final bool loadingMore;
+
+  bool get hasMore => page < totalPages;
 
   /// Set only when [status] is [MenuStatus.failure]; its message is safe to
   /// show verbatim.
@@ -69,6 +82,9 @@ class MenuState extends Equatable {
       status == MenuStatus.ready && dishes.isNotEmpty && visible.isEmpty;
 
   MenuState copyWith({
+    int? page,
+    int? totalPages,
+    bool? loadingMore,
     MenuStatus? status,
     List<MenuCategory>? categories,
     List<Dish>? dishes,
@@ -82,6 +98,9 @@ class MenuState extends Equatable {
       status: status ?? this.status,
       categories: categories ?? this.categories,
       dishes: dishes ?? this.dishes,
+      page: page ?? this.page,
+      totalPages: totalPages ?? this.totalPages,
+      loadingMore: loadingMore ?? this.loadingMore,
       failure: clearFailure ? null : (failure ?? this.failure),
       categorySlug: clearCategory ? null : (categorySlug ?? this.categorySlug),
       query: query ?? this.query,
@@ -90,6 +109,9 @@ class MenuState extends Equatable {
 
   @override
   List<Object?> get props => [
+    page,
+    totalPages,
+    loadingMore,
     status,
     categories,
     dishes,
@@ -129,16 +151,21 @@ class MenuCubit extends Cubit<MenuState> {
     }
 
     try {
-      final results = await Future.wait([
-        _repository.categories(),
-        _repository.dishes(),
-      ]);
+      // Awaited in turn rather than through `Future.wait`: its list form
+      // loses both types and needs the casts that used to be here, and its
+      // record form wraps a failure in a `ParallelWaitError` the catch below
+      // would not recognise.
+      final categories = await _repository.categories();
+      final page = await _repository.dishes();
 
       emit(
         state.copyWith(
           status: MenuStatus.ready,
-          categories: results[0] as List<MenuCategory>,
-          dishes: results[1] as List<Dish>,
+          categories: categories,
+          dishes: page.items,
+          page: page.page,
+          totalPages: page.totalPages,
+          loadingMore: false,
           clearFailure: true,
         ),
       );
@@ -157,6 +184,31 @@ class MenuCubit extends Cubit<MenuState> {
   }
 
   /// Null selects every section.
+  /// Fetches the next page of dishes and appends it.
+  ///
+  /// Appended so the grid a customer is scrolling does not rebuild under them.
+  /// Does nothing where the endpoint returned everything in one page, which is
+  /// what [MenuState.hasMore] being false means.
+  Future<void> loadMore() async {
+    if (!state.hasMore || state.loadingMore) return;
+    emit(state.copyWith(loadingMore: true, clearFailure: true));
+
+    try {
+      final next = await _repository.dishes(page: state.page + 1);
+      emit(
+        state.copyWith(
+          dishes: [...state.dishes, ...next.items],
+          page: next.page,
+          totalPages: next.totalPages,
+          loadingMore: false,
+        ),
+      );
+    } on ApiFailure catch (failure) {
+      // What is already listed stays; only the footer reports the problem.
+      emit(state.copyWith(loadingMore: false, failure: failure));
+    }
+  }
+
   void selectCategory(String? slug) => emit(
     slug == null
         ? state.copyWith(clearCategory: true)

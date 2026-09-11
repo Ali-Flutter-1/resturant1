@@ -128,16 +128,20 @@ class DiscoverCubit extends Cubit<DiscoverState> {
     }
 
     try {
-      final results = await Future.wait([
-        _repository.categories(),
-        _repository.dishes(),
-      ]);
+      // Awaited in turn and emitted once. `Future.wait` over a list of
+      // differently typed futures loses both types, and the casts that stood
+      // here were a runtime failure waiting for a signature to change -- which
+      // is exactly what happened when the menu became paginated.
+      final categories = await _repository.categories();
+      final dishes = await _repository.dishes();
 
       emit(
         state.copyWith(
           status: DiscoverStatus.ready,
-          categories: results[0] as List<MenuCategory>,
-          dishes: results[1] as List<Dish>,
+          categories: categories,
+          // The home screen shows a selection, not the whole menu, so one
+          // page is all it ever needed.
+          dishes: dishes.items,
           clearFailure: true,
         ),
       );

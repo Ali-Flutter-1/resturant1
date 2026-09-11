@@ -57,6 +57,20 @@ class PaymentFlow {
   Future<CustomerOrder> payFor(CustomerOrder order) async {
     var current = order;
 
+    // The restaurant has not decided yet, so there is nothing to pay for. The
+    // backend would answer ORDER_NOT_APPROVED; refusing here means the
+    // customer reads a sentence about their order rather than an error about a
+    // request they did not know was made.
+    if (current.awaitingApproval) {
+      throw const ApiFailure(
+        kind: ApiFailureKind.conflict,
+        code: 'ORDER_NOT_APPROVED',
+        message:
+            'The restaurant has not approved this order yet. You will be able '
+            'to pay as soon as they do.',
+      );
+    }
+
     // No page yet -- either Worldpay was unreachable when the order was placed,
     // or a previous attempt was declined and its page is spent. Asking for one
     // is safe: an unpaid order gets its existing page back rather than a second

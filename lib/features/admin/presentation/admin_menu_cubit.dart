@@ -12,6 +12,9 @@ class AdminMenuState extends Equatable {
     this.status = AdminMenuStatus.loading,
     this.categories = const [],
     this.dishes = const [],
+    this.page = 1,
+    this.totalPages = 0,
+    this.loadingMore = false,
     this.failure,
     this.categoryId,
     this.query = '',
@@ -26,6 +29,16 @@ class AdminMenuState extends Equatable {
   /// Every dish, unfiltered. Filtering is a view concern (see [visible]) so
   /// switching a chip costs no round trip and no loading flicker.
   final List<Dish> dishes;
+
+  /// The last page fetched and how many there are.
+  ///
+  /// An endpoint that does not paginate answers as a single complete page, so
+  /// [hasMore] is false and nothing offers to fetch a second one.
+  final int page;
+  final int totalPages;
+  final bool loadingMore;
+
+  bool get hasMore => page < totalPages;
 
   final ApiFailure? failure;
 
@@ -60,6 +73,9 @@ class AdminMenuState extends Equatable {
       status == AdminMenuStatus.ready && dishes.isNotEmpty && visible.isEmpty;
 
   AdminMenuState copyWith({
+    int? page,
+    int? totalPages,
+    bool? loadingMore,
     AdminMenuStatus? status,
     List<MenuCategory>? categories,
     List<Dish>? dishes,
@@ -74,6 +90,9 @@ class AdminMenuState extends Equatable {
       status: status ?? this.status,
       categories: categories ?? this.categories,
       dishes: dishes ?? this.dishes,
+      page: page ?? this.page,
+      totalPages: totalPages ?? this.totalPages,
+      loadingMore: loadingMore ?? this.loadingMore,
       failure: clearFailure ? null : (failure ?? this.failure),
       categoryId: clearCategory ? null : (categoryId ?? this.categoryId),
       query: query ?? this.query,
@@ -83,6 +102,9 @@ class AdminMenuState extends Equatable {
 
   @override
   List<Object?> get props => [
+    page,
+    totalPages,
+    loadingMore,
     status,
     categories,
     dishes,
@@ -114,16 +136,21 @@ class AdminMenuCubit extends Cubit<AdminMenuState> {
     try {
       // In parallel: a dish carries its categories, but the chip strip needs the
       // full list including sections that are currently empty.
-      final results = await Future.wait([
-        _repository.categories(),
-        _repository.dishes(),
-      ]);
+      // Awaited in turn rather than through `Future.wait`: its list form
+      // loses both types and needs the casts that used to be here, and its
+      // record form wraps a failure in a `ParallelWaitError` the catch below
+      // would not recognise.
+      final categories = await _repository.categories();
+      final page = await _repository.dishes();
 
       emit(
         state.copyWith(
           status: AdminMenuStatus.ready,
-          categories: results[0] as List<MenuCategory>,
-          dishes: results[1] as List<Dish>,
+          categories: categories,
+          dishes: page.items,
+          page: page.page,
+          totalPages: page.totalPages,
+          loadingMore: false,
           clearFailure: true,
         ),
       );
@@ -136,6 +163,31 @@ class AdminMenuCubit extends Cubit<AdminMenuState> {
           failure: failure,
         ),
       );
+    }
+  }
+
+  /// Fetches the next page of dishes and appends it.
+  ///
+  /// Appended so the grid a customer is scrolling does not rebuild under them.
+  /// Does nothing where the endpoint returned everything in one page, which is
+  /// what [AdminMenuState.hasMore] being false means.
+  Future<void> loadMore() async {
+    if (!state.hasMore || state.loadingMore) return;
+    emit(state.copyWith(loadingMore: true, clearFailure: true));
+
+    try {
+      final next = await _repository.dishes(page: state.page + 1);
+      emit(
+        state.copyWith(
+          dishes: [...state.dishes, ...next.items],
+          page: next.page,
+          totalPages: next.totalPages,
+          loadingMore: false,
+        ),
+      );
+    } on ApiFailure catch (failure) {
+      // What is already listed stays; only the footer reports the problem.
+      emit(state.copyWith(loadingMore: false, failure: failure));
     }
   }
 

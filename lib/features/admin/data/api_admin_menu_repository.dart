@@ -1,5 +1,6 @@
 import '../../../core/network/api_client.dart';
 import '../../../core/network/api_constants.dart';
+import '../../../core/network/page_data.dart';
 import '../../menu/domain/dish.dart';
 import '../domain/admin_menu_repository.dart';
 import '../domain/dish_configuration_draft.dart';
@@ -57,12 +58,20 @@ class ApiAdminMenuRepository implements AdminMenuRepository {
   }
 
   @override
-  Future<List<Dish>> dishes({String? categoryId}) async {
-    final rows = await _client.list(
+  Future<PageData<Dish>> dishes({
+    String? categoryId,
+    int page = 1,
+    int pageSize = 40,
+  }) async {
+    final data = await _client.maybePage(
       ApiConstants.adminDishes,
-      query: categoryId == null ? null : {'category_id': categoryId},
+      query: {
+        'category_id': ?categoryId,
+        'page': page,
+        'page_size': pageSize.clamp(1, 100),
+      },
     );
-    return rows.map(Dish.fromJson).toList();
+    return data.map(Dish.fromJson);
   }
 
   @override

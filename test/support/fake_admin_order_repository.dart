@@ -1,4 +1,5 @@
 import 'package:practice/core/network/api_failure.dart';
+import 'package:practice/core/network/page_data.dart';
 import 'package:practice/features/admin/domain/admin_order.dart';
 import 'package:practice/features/admin/domain/admin_order_repository.dart';
 
@@ -90,7 +91,7 @@ class FakeAdminOrderRepository implements AdminOrderRepository {
   }
 
   @override
-  Future<List<AdminOrder>> orders({
+  Future<PageData<AdminOrder>> orders({
     int page = 1,
     int pageSize = 20,
     OrderStatus? status,
@@ -100,6 +101,7 @@ class FakeAdminOrderRepository implements AdminOrderRepository {
     listCalls++;
     lastFilter = status;
     lastOpenOnly = openOnly;
+    lastPageAsked = page;
     await _wait();
     _check();
 
@@ -109,7 +111,20 @@ class FakeAdminOrderRepository implements AdminOrderRepository {
     } else if (openOnly) {
       rows = rows.where((o) => o.status.isOpen).toList();
     }
-    return rows;
+
+    // Sliced for real, so a pagination test is testing pagination rather than
+    // a fake that returns everything whatever page it is asked for.
+    final start = (page - 1) * pageSize;
+    final slice = start >= rows.length
+        ? const <AdminOrder>[]
+        : rows.sublist(start, (start + pageSize).clamp(0, rows.length));
+    return PageData(
+      items: slice,
+      page: page,
+      pageSize: pageSize,
+      total: rows.length,
+      totalPages: (rows.length / pageSize).ceil(),
+    );
   }
 
   @override
@@ -125,6 +140,70 @@ class FakeAdminOrderRepository implements AdminOrderRepository {
     await _wait();
     _check();
     return _orders.firstWhere((o) => o.id == id);
+  }
+
+  /// The approve / decline calls, recorded so a test can assert which endpoint
+  /// was used -- approving is deliberately *not* a status PATCH, and a fake
+  /// that accepted either would hide the difference.
+  final List<String> approved = [];
+
+  /// The page number of the last list request.
+  int? lastPageAsked;
+  Map<String, String>? lastDecline;
+
+  @override
+  Future<AdminOrder> approve(String id) async {
+    await _wait();
+    final error = statusFailure ?? failure;
+    if (error != null) throw error;
+
+    approved.add(id);
+    final existing = _orders.firstWhere((o) => o.id == id);
+    // What the backend does: cash goes to the kitchen, card becomes payable.
+    return _replace(
+      existing,
+      existing.isCard ? OrderStatus.awaitingPayment : OrderStatus.placed,
+    );
+  }
+
+  @override
+  Future<AdminOrder> decline(String id, {required String reason}) async {
+    await _wait();
+    final error = statusFailure ?? failure;
+    if (error != null) throw error;
+
+    lastDecline = {'id': id, 'reason': reason};
+    final existing = _orders.firstWhere((o) => o.id == id);
+    return _replace(existing, OrderStatus.rejected, note: reason);
+  }
+
+  /// Stores [existing] again under a new status, and returns it.
+  AdminOrder _replace(AdminOrder existing, OrderStatus status, {String? note}) {
+    final updated = AdminOrder(
+      id: existing.id,
+      orderNumber: existing.orderNumber,
+      status: status,
+      fulfilment: existing.fulfilment,
+      paymentStatus: existing.paymentStatus,
+      isCard: existing.isCard,
+      totalPence: existing.totalPence,
+      itemCount: existing.itemCount,
+      isAsap: existing.isAsap,
+      placedAt: existing.placedAt,
+      requestedFor: existing.requestedFor,
+      lines: existing.lines,
+      contactName: existing.contactName,
+      contactPhone: existing.contactPhone,
+      addressLine1: existing.addressLine1,
+      city: existing.city,
+      postcode: existing.postcode,
+      cancellationReason: note ?? existing.cancellationReason,
+    );
+    _orders = [
+      for (final o in _orders)
+        if (o.id == existing.id) updated else o,
+    ];
+    return updated;
   }
 
   @override
@@ -145,6 +224,7 @@ class FakeAdminOrderRepository implements AdminOrderRepository {
       status: status,
       fulfilment: existing.fulfilment,
       paymentStatus: existing.paymentStatus,
+      isCard: existing.isCard,
       totalPence: existing.totalPence,
       itemCount: existing.itemCount,
       isAsap: existing.isAsap,

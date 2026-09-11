@@ -1,4 +1,5 @@
 import '../../cart/cart_cubit.dart';
+import '../../../core/network/page_data.dart';
 import '../domain/customer_order.dart';
 import '../domain/order_quote.dart';
 import '../domain/order_repository.dart';
@@ -120,9 +121,20 @@ class DemoOrderRepository implements OrderRepository {
   }
 
   @override
-  Future<List<CustomerOrder>> myOrders() async {
+  Future<PageData<CustomerOrder>> myOrders({
+    int page = 1,
+    int pageSize = 20,
+  }) async {
     await Future<void>.delayed(delay);
-    return _orders;
+    // One page of demo data, and honestly labelled as the only one -- the
+    // screen then never offers a "load more" that would come back empty.
+    return PageData(
+      items: _orders,
+      page: 1,
+      pageSize: pageSize,
+      total: _orders.length,
+      totalPages: _orders.isEmpty ? 0 : 1,
+    );
   }
 
   @override

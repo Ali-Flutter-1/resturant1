@@ -1,6 +1,7 @@
 import 'package:practice/core/network/api_failure.dart';
 import 'package:practice/features/admin/domain/admin_menu_repository.dart';
 import 'package:practice/features/admin/domain/dish_configuration_draft.dart';
+import 'package:practice/core/network/page_data.dart';
 import 'package:practice/features/menu/domain/dish.dart';
 
 /// An [AdminMenuRepository] that answers from memory and records what it was
@@ -120,12 +121,30 @@ class FakeAdminMenuRepository implements AdminMenuRepository {
   }
 
   @override
-  Future<List<Dish>> dishes({String? categoryId}) async {
+  Future<PageData<Dish>> dishes({
+    String? categoryId,
+    int page = 1,
+    int pageSize = 40,
+  }) async {
     _check();
-    return categoryId == null
+    lastPageAsked = page;
+    final rows = categoryId == null
         ? List.of(_dishes)
         : _dishes.where((d) => d.categoryIds.contains(categoryId)).toList();
+    final start = (page - 1) * pageSize;
+    return PageData(
+      items: start >= rows.length
+          ? const []
+          : rows.sublist(start, (start + pageSize).clamp(0, rows.length)),
+      page: page,
+      pageSize: pageSize,
+      total: rows.length,
+      totalPages: (rows.length / pageSize).ceil(),
+    );
   }
+
+  /// The page number of the last request.
+  int? lastPageAsked;
 
   @override
   Future<List<DishPhoto>> uploadImages(List<String> filePaths) async {

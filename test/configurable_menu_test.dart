@@ -690,17 +690,23 @@ void main() {
       final pending = order('awaiting_payment', 'pending');
       expect(pending.status, CustomerOrderStatus.awaitingPayment);
       expect(pending.needsPayment, isTrue);
-      expect(pending.statusLabel, 'Awaiting payment');
+      expect(pending.statusLabel, 'Payment needed');
       // It has not reached the kitchen, so it is not on the tracker.
       expect(pending.status.step, isNull);
       expect(pending.status.isLive, isTrue);
     });
 
     test('an authorised order never offers Pay again', () {
-      final authorised = order('placed', 'authorized');
+      final authorised = order('awaiting_payment', 'authorized');
       expect(authorised.needsPayment, isFalse);
       expect(authorised.paymentStatus.isCommitted, isTrue);
-      expect(authorised.paymentMessage, contains('Waiting for the restaurant'));
+      // Approval happened before payment, so capture follows on its own --
+      // there is no second restaurant step to tell the customer to wait for.
+      expect(authorised.paymentMessage, contains('Confirming'));
+      expect(
+        authorised.paymentMessage,
+        isNot(contains('Waiting for the restaurant')),
+      );
     });
 
     test('capture and cancel in progress offer nothing and keep polling', () {

@@ -32,6 +32,7 @@ class CheckoutState extends Equatable {
     this.requestedFor,
     this.prepMinutes,
     this.paymentMethod = PaymentMethod.cash,
+    this.cardUnavailable = false,
     this.paying = false,
     this.postcode = '',
     this.zoneCheck,
@@ -51,6 +52,14 @@ class CheckoutState extends Equatable {
   /// Cash on handover, or a card paid on Worldpay's page before the kitchen
   /// ever sees the order.
   final PaymentMethod paymentMethod;
+
+  /// Whether this deployment has told us it cannot take cards.
+  ///
+  /// Learned from a `CARD_PAYMENT_UNAVAILABLE` on placement rather than
+  /// assumed: whether Worldpay is configured is the backend's business, and
+  /// hardcoding it in the app meant a server that supported card showed the
+  /// option greyed out.
+  final bool cardUnavailable;
 
   /// True while the payment sheet is open or the result is being confirmed.
   final bool paying;
@@ -164,6 +173,7 @@ class CheckoutState extends Equatable {
     String? requestedFor,
     int? prepMinutes,
     PaymentMethod? paymentMethod,
+    bool? cardUnavailable,
     bool? paying,
     String? postcode,
     PostcodeCheck? zoneCheck,
@@ -187,6 +197,7 @@ class CheckoutState extends Equatable {
       requestedFor: clearSlot ? null : (requestedFor ?? this.requestedFor),
       prepMinutes: prepMinutes ?? this.prepMinutes,
       paymentMethod: paymentMethod ?? this.paymentMethod,
+      cardUnavailable: cardUnavailable ?? this.cardUnavailable,
       paying: paying ?? this.paying,
       postcode: postcode ?? this.postcode,
       zoneCheck: clearZoneCheck ? null : (zoneCheck ?? this.zoneCheck),
@@ -206,6 +217,7 @@ class CheckoutState extends Equatable {
     staleMenuNotice,
     placedOrder,
     paymentMethod,
+    cardUnavailable,
     paying,
     postcode,
     zoneCheck,
@@ -540,13 +552,25 @@ class CheckoutCubit extends Cubit<CheckoutState> {
 
       emit(state.copyWith(stage: CheckoutStage.placed, placedOrder: order));
 
-      // Straight to the payment page. A card order sits outside the kitchen
-      // until the money clears, so there is nothing to wait for and every
-      // reason not to make the customer find a "Pay" button.
+      // Deliberately no jump to a payment page. Every order -- cash and card
+      // alike -- now starts at `pending_approval`, and asking for a page
+      // before the restaurant has approved it comes back as
+      // ORDER_NOT_APPROVED. The customer pays from My Orders once they are
+      // told it is approved.
+      //
+      // `needsPayment` already encodes that rule, so this is belt and braces
+      // rather than a second opinion: if a deployment ever did return a
+      // payable order straight from placement, this still does the right
+      // thing.
       if (order.needsPayment) await payNow();
       return null;
     } on ApiFailure catch (failure) {
       final notice = _repairStaleBasket(failure);
+      // This deployment has no payment provider configured. Remembered so the
+      // card option greys itself out, and the choice is moved back to cash so
+      // the very next tap of Place Order succeeds rather than repeating the
+      // same refusal.
+      final noCard = failure.code == 'CARD_PAYMENT_UNAVAILABLE';
       // Back to ready, not failed: the entered details are still on screen and
       // still valid, and most of these are worth another try with the same key.
       emit(
@@ -556,6 +580,8 @@ class CheckoutCubit extends Cubit<CheckoutState> {
           fieldErrors: failure.fieldErrors,
           staleMenuNotice: notice,
           clearStaleNotice: notice == null,
+          cardUnavailable: noCard ? true : null,
+          paymentMethod: noCard ? PaymentMethod.cash : null,
         ),
       );
       // A stale basket has changed, so it must be re-priced before it can be

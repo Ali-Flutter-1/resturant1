@@ -1,4 +1,5 @@
 import '../../../core/network/api_client.dart';
+import '../../../core/network/page_data.dart';
 import '../../../core/network/api_constants.dart';
 import '../domain/admin_order.dart';
 import '../domain/admin_order_repository.dart';
@@ -9,18 +10,19 @@ class ApiAdminOrderRepository implements AdminOrderRepository {
   final ApiClient _client;
 
   @override
-  Future<List<AdminOrder>> orders({
+  Future<PageData<AdminOrder>> orders({
     int page = 1,
     int pageSize = 20,
     OrderStatus? status,
     FulfilmentType? fulfilment,
     bool openOnly = false,
   }) async {
-    final rows = await _client.list(
+    final data = await _client.page(
       ApiConstants.adminOrders,
       query: {
         'page': page,
-        'page_size': pageSize,
+        // The API's own ceiling is 100.
+        'page_size': pageSize.clamp(1, 100),
         // Omitted rather than sent empty: an absent filter and a filter for
         // nothing are different requests.
         'status': ?status?.wire,
@@ -28,7 +30,7 @@ class ApiAdminOrderRepository implements AdminOrderRepository {
         if (openOnly) 'open_only': true,
       },
     );
-    return rows.map(AdminOrder.fromJson).toList();
+    return data.map(AdminOrder.fromJson);
   }
 
   @override
@@ -38,6 +40,21 @@ class ApiAdminOrderRepository implements AdminOrderRepository {
   @override
   Future<AdminOrder> orderById(String id) async =>
       AdminOrder.fromJson(await _client.object(ApiConstants.adminOrder(id)));
+
+  @override
+  Future<AdminOrder> approve(String id) async => AdminOrder.fromJson(
+    await _client.object(ApiConstants.adminOrderApprove(id), method: 'POST'),
+  );
+
+  @override
+  Future<AdminOrder> decline(String id, {required String reason}) async =>
+      AdminOrder.fromJson(
+        await _client.object(
+          ApiConstants.adminOrderDecline(id),
+          method: 'POST',
+          body: {'reason': reason.trim()},
+        ),
+      );
 
   @override
   Future<AdminOrder> updateStatus(

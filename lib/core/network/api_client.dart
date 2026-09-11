@@ -300,6 +300,59 @@ class ApiClient {
     );
   }
 
+  /// [page], for an endpoint that may or may not be paginated.
+  ///
+  /// Some list routes wrap their rows in the `{items, page, total_pages}`
+  /// envelope and some return a bare array, and which is which is not
+  /// something a screen should have to know -- nor something that should
+  /// break if the backend starts paginating a route that did not before.
+  ///
+  /// A bare array comes back as a single complete page, so `hasMore` is false
+  /// and nothing offers to fetch a second one that does not exist.
+  Future<PageData<Map<String, dynamic>>> maybePage(
+    String path, {
+    Map<String, dynamic>? query,
+  }) async {
+    final data = await send(path, query: query);
+
+    if (data is List) {
+      final rows = data
+          .whereType<Map>()
+          .map((row) => Map<String, dynamic>.from(row))
+          .toList();
+      return PageData(
+        items: rows,
+        page: 1,
+        pageSize: rows.length,
+        total: rows.length,
+        // One page when there is anything, none when there is not -- so an
+        // empty result never invites a request for page one of nothing.
+        totalPages: rows.isEmpty ? 0 : 1,
+      );
+    }
+
+    if (data is! Map) {
+      throw const ApiFailure(
+        kind: ApiFailureKind.unknown,
+        message: 'The server sent something unexpected. Please try again.',
+      );
+    }
+
+    final rows = data['items'];
+    return PageData(
+      items: rows is List
+          ? rows
+                .whereType<Map>()
+                .map((row) => Map<String, dynamic>.from(row))
+                .toList()
+          : const [],
+      page: (data['page'] as num?)?.toInt() ?? 1,
+      pageSize: (data['page_size'] as num?)?.toInt() ?? 20,
+      total: (data['total'] as num?)?.toInt() ?? 0,
+      totalPages: (data['total_pages'] as num?)?.toInt() ?? 0,
+    );
+  }
+
   /// [send] for endpoints returning a JSON array.
   Future<List<Map<String, dynamic>>> list(
     String path, {

@@ -168,6 +168,11 @@ class _Body extends StatelessWidget {
         if (state.dishes.isEmpty) return const _MenuEmpty();
 
         final visible = state.visible;
+        // Only when nothing is narrowing the list -- see the footer note.
+        final showMore =
+            state.hasMore &&
+            state.query.trim().isEmpty &&
+            state.categorySlug == null;
         if (visible.isEmpty) {
           return _NoMatches(query: state.query, onClear: onClear);
         }
@@ -184,15 +189,54 @@ class _Body extends StatelessWidget {
               top: 0,
               bottom: AppSpacing.x8 + MediaQuery.paddingOf(context).bottom,
             ),
-            itemCount: visible.length,
+            // One extra row for the footer where the menu runs to another
+            // page. A search or a chip narrows what is already loaded, so the
+            // footer is hidden then -- fetching a page that would mostly be
+            // filtered out again reads as a button that does nothing.
+            itemCount: visible.length + (showMore ? 1 : 0),
             separatorBuilder: (_, _) => const SizedBox(height: AppSpacing.x4),
-            itemBuilder: (context, index) => _MenuCard(
-              dish: visible[index],
-              onTap: onOpenDish,
-            ).revealItem(index),
+            itemBuilder: (context, index) {
+              if (index >= visible.length) {
+                return _MenuFooter(
+                  loading: state.loadingMore,
+                  onLoadMore: context.read<MenuCubit>().loadMore,
+                );
+              }
+              return _MenuCard(
+                dish: visible[index],
+                onTap: onOpenDish,
+              ).revealItem(index);
+            },
           ),
         );
     }
+  }
+}
+
+/// The end of the loaded menu, with a way to fetch more.
+class _MenuFooter extends StatelessWidget {
+  const _MenuFooter({required this.loading, required this.onLoadMore});
+
+  final bool loading;
+  final VoidCallback onLoadMore;
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: loading
+          ? const Padding(
+              padding: EdgeInsets.all(AppSpacing.x3),
+              child: SizedBox(
+                width: 20,
+                height: 20,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              ),
+            )
+          : OutlinedButton(
+              onPressed: onLoadMore,
+              child: const Text('Load more dishes'),
+            ),
+    );
   }
 }
 

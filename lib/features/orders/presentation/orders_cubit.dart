@@ -15,6 +15,9 @@ class OrdersState extends Equatable {
     this.failure,
     this.cancellingId,
     this.payingId,
+    this.page = 1,
+    this.totalPages = 0,
+    this.loadingMore = false,
   });
 
   final OrdersStatus status;
@@ -32,6 +35,21 @@ class OrdersState extends Equatable {
   /// The order whose payment sheet is open, or whose result is being confirmed.
   final String? payingId;
 
+  /// The last page fetched, and how many there are. Together they are what
+  /// tells the screen whether the end of the history has been reached.
+  final int page;
+  final int totalPages;
+
+  /// True while the next page is in flight. The rows already on screen stay
+  /// put; only the footer changes.
+  final bool loadingMore;
+
+  /// Whether there is more history to fetch.
+  ///
+  /// `total_pages` is 0 for an empty result, so this is false there rather
+  /// than inviting a request for page one of nothing.
+  bool get hasMore => page < totalPages;
+
   /// The orders still in progress, for the tracker at the top.
   List<CustomerOrder> get live =>
       orders.where((order) => order.status.isLive).toList();
@@ -48,6 +66,9 @@ class OrdersState extends Equatable {
     ApiFailure? failure,
     String? cancellingId,
     String? payingId,
+    int? page,
+    int? totalPages,
+    bool? loadingMore,
     bool clearFailure = false,
     bool clearCancelling = false,
     bool clearPaying = false,
@@ -55,6 +76,9 @@ class OrdersState extends Equatable {
     return OrdersState(
       status: status ?? this.status,
       orders: orders ?? this.orders,
+      page: page ?? this.page,
+      totalPages: totalPages ?? this.totalPages,
+      loadingMore: loadingMore ?? this.loadingMore,
       failure: clearFailure ? null : (failure ?? this.failure),
       cancellingId: clearCancelling
           ? null
@@ -64,7 +88,16 @@ class OrdersState extends Equatable {
   }
 
   @override
-  List<Object?> get props => [status, orders, failure, cancellingId, payingId];
+  List<Object?> get props => [
+    page,
+    totalPages,
+    loadingMore,
+    status,
+    orders,
+    failure,
+    cancellingId,
+    payingId,
+  ];
 }
 
 /// The customer's order history, and the live tracker built from it.
@@ -99,10 +132,14 @@ class OrdersCubit extends Cubit<OrdersState> {
     }
 
     try {
+      final data = await _repository.myOrders();
       emit(
         state.copyWith(
           status: OrdersStatus.ready,
-          orders: await _repository.myOrders(),
+          orders: data.items,
+          page: data.page,
+          totalPages: data.totalPages,
+          loadingMore: false,
           clearFailure: true,
         ),
       );
@@ -115,6 +152,32 @@ class OrdersCubit extends Cubit<OrdersState> {
           failure: failure,
         ),
       );
+    }
+  }
+
+  /// Fetches the next page of history and appends it.
+  ///
+  /// Appended rather than replacing: the live order at the top and everything
+  /// already read stay exactly where they were. A reader scrolling through
+  /// last month's receipts must not have the list rebuilt under their thumb.
+  Future<void> loadMore() async {
+    if (!state.hasMore || state.loadingMore) return;
+    emit(state.copyWith(loadingMore: true, clearFailure: true));
+
+    try {
+      final data = await _repository.myOrders(page: state.page + 1);
+      emit(
+        state.copyWith(
+          orders: [...state.orders, ...data.items],
+          page: data.page,
+          totalPages: data.totalPages,
+          loadingMore: false,
+        ),
+      );
+    } on ApiFailure catch (failure) {
+      // What is already on screen stays. Failing to fetch page three is no
+      // reason to take pages one and two away.
+      emit(state.copyWith(loadingMore: false, failure: failure));
     }
   }
 

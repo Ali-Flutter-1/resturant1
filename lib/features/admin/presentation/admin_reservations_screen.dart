@@ -84,10 +84,36 @@ class _AdminReservationsView extends StatelessWidget {
                                   AppSpacing.x12 +
                                   MediaQuery.paddingOf(context).bottom,
                             ),
-                            itemCount: state.bookings.length,
+                            // One extra row for the footer where there is
+                            // another page behind this one.
+                            itemCount:
+                                state.bookings.length + (state.hasMore ? 1 : 0),
                             separatorBuilder: (_, _) =>
                                 const SizedBox(height: AppSpacing.x3),
                             itemBuilder: (context, index) {
+                              if (index >= state.bookings.length) {
+                                return Center(
+                                  child: state.loadingMore
+                                      ? const Padding(
+                                          padding: EdgeInsets.all(
+                                            AppSpacing.x3,
+                                          ),
+                                          child: SizedBox(
+                                            width: 20,
+                                            height: 20,
+                                            child: CircularProgressIndicator(
+                                              strokeWidth: 2,
+                                            ),
+                                          ),
+                                        )
+                                      : OutlinedButton(
+                                          onPressed: cubit.loadMore,
+                                          child: const Text(
+                                            'Load more bookings',
+                                          ),
+                                        ),
+                                );
+                              }
                               final booking = state.bookings[index];
                               return _BookingRow(
                                 key: ValueKey(booking.id),

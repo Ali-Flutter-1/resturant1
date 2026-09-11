@@ -1,6 +1,7 @@
 import 'dart:math';
 
 import '../../../core/network/api_client.dart';
+import '../../../core/network/page_data.dart';
 import '../../../core/network/api_constants.dart';
 import '../../cart/cart_cubit.dart';
 import '../domain/customer_order.dart';
@@ -89,28 +90,40 @@ class ApiOrderRepository implements OrderRepository {
   }
 
   @override
-  Future<List<CustomerOrder>> myOrders() async {
-    // One page, deliberately generous. The endpoint defaults to 20 and caps at
-    // 100; a customer with more than fifty past orders would need real
-    // pagination, which this screen does not have yet — better to say so than
-    // to silently show the newest twenty as if that were all of them.
-    final rows = await _client.list(
+  Future<PageData<CustomerOrder>> myOrders({
+    int page = 1,
+    int pageSize = 20,
+  }) async {
+    final data = await _client.page(
       ApiConstants.orders,
-      query: {'page': 1, 'page_size': 50},
+      // The API's own ceiling is 100. Twenty is a screenful and a bit, which
+      // is what makes the first page arrive quickly.
+      query: {'page': page, 'page_size': pageSize.clamp(1, 100)},
     );
-    final orders = rows.map(CustomerOrder.fromJson).toList();
-    // Sorted here rather than trusted from the API. The list endpoint is
-    // paginated and its default ordering isn't documented, and this screen's
-    // whole shape — live order on top, history beneath — depends on newest
-    // first. Orders with no timestamp sink rather than jumping the queue.
-    orders.sort((a, b) {
-      final at = a.placedAt, bt = b.placedAt;
-      if (at == null && bt == null) return 0;
-      if (at == null) return 1;
-      if (bt == null) return -1;
-      return bt.compareTo(at);
-    });
-    return orders;
+    final orders = data.map(CustomerOrder.fromJson);
+    // Sorted here rather than trusted from the API. Its default ordering is
+    // not documented, and this screen's whole shape — live order on top,
+    // history beneath — depends on newest first. Orders with no timestamp sink
+    // rather than jumping the queue.
+    //
+    // Within a page only: sorting across appended pages is the server's job,
+    // and re-sorting the whole list here would reshuffle rows under a reader's
+    // thumb every time another page landed.
+    final sorted = [...orders.items]
+      ..sort((a, b) {
+        final at = a.placedAt, bt = b.placedAt;
+        if (at == null && bt == null) return 0;
+        if (at == null) return 1;
+        if (bt == null) return -1;
+        return bt.compareTo(at);
+      });
+    return PageData(
+      items: sorted,
+      page: orders.page,
+      pageSize: orders.pageSize,
+      total: orders.total,
+      totalPages: orders.totalPages,
+    );
   }
 
   @override

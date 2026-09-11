@@ -263,10 +263,35 @@ class _AdminMenuViewState extends State<_AdminMenuView> {
                                   AppSpacing.x12 +
                                   MediaQuery.paddingOf(context).bottom,
                             ),
-                            itemCount: visible.length,
+                            // One extra row for the footer where the menu
+                            // runs to another page.
+                            itemCount: visible.length + (state.hasMore ? 1 : 0),
                             separatorBuilder: (_, _) =>
                                 const SizedBox(height: AppSpacing.x8),
                             itemBuilder: (context, position) {
+                              if (position >= visible.length) {
+                                return Center(
+                                  child: state.loadingMore
+                                      ? const Padding(
+                                          padding: EdgeInsets.all(
+                                            AppSpacing.x3,
+                                          ),
+                                          child: SizedBox(
+                                            width: 20,
+                                            height: 20,
+                                            child: CircularProgressIndicator(
+                                              strokeWidth: 2,
+                                            ),
+                                          ),
+                                        )
+                                      : OutlinedButton(
+                                          onPressed: context
+                                              .read<AdminMenuCubit>()
+                                              .loadMore,
+                                          child: const Text('Load more dishes'),
+                                        ),
+                                );
+                              }
                               final dish = visible[position];
                               return _DishCard(
                                 // Keyed by id so a delete or a rename cannot hand

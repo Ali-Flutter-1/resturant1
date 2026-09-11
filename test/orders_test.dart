@@ -150,16 +150,43 @@ void main() {
       expect(cooking.canCancel, isFalse);
     });
 
-    test('cancelling stops at the kitchen door', () {
-      // The server can veto, but it cannot widen the window: once cooking has
-      // started, food and time have been spent and calling it off is a
-      // conversation with the restaurant rather than a button.
+    test('the server decides whether cancelling is still possible', () {
+      // This used to assert the opposite -- that the app refused a cancellation
+      // once the status said `preparing`, whatever the server sent. The guide
+      // is explicit that `can_cancel` is the rule and the app should not
+      // reproduce it, and the approval step proved why: when every order began
+      // at `placed` the local check happened to agree, and when orders started
+      // at `pending_approval` instead it silently removed the cancel button
+      // from the whole window a customer is most likely to use it in.
       final cookingButAllowed = CustomerOrder.fromJson({
         'id': 'd',
         'status': 'preparing',
         'can_cancel': true,
       });
-      expect(cookingButAllowed.canCancel, isFalse);
+      expect(cookingButAllowed.canCancel, isTrue);
+
+      final placedButRefused = CustomerOrder.fromJson({
+        'id': 'e',
+        'status': 'placed',
+        'can_cancel': false,
+      });
+      expect(placedButRefused.canCancel, isFalse);
+    });
+
+    test('a response with no flag falls back to the documented states', () {
+      // Only for a payload that omits the field. The three the API accepts a
+      // cancellation in, and nothing after the kitchen has started.
+      expect(
+        CustomerOrder.fromJson({
+          'id': 'f',
+          'status': 'pending_approval',
+        }).canCancel,
+        isTrue,
+      );
+      expect(
+        CustomerOrder.fromJson({'id': 'g', 'status': 'preparing'}).canCancel,
+        isFalse,
+      );
     });
 
     test('collection orders are never described as on their way', () {
@@ -556,7 +583,8 @@ void main() {
     });
 
     test('cover a live order at each stage plus a full history', () async {
-      final orders = await DemoOrderRepository(delay: Duration.zero).myOrders();
+      final page = await DemoOrderRepository(delay: Duration.zero).myOrders();
+      final orders = page.items;
       final live = orders.where((o) => o.status.isLive);
 
       expect(live.map((o) => o.status), contains(CustomerOrderStatus.placed));
@@ -576,13 +604,13 @@ void main() {
 
     test('cancelling one sticks', () async {
       final repository = DemoOrderRepository(delay: Duration.zero);
-      final target = (await repository.myOrders()).firstWhere(
+      final target = (await repository.myOrders()).items.firstWhere(
         (o) => o.canCancel,
       );
 
       await repository.cancel(target.id);
 
-      final after = (await repository.myOrders()).firstWhere(
+      final after = (await repository.myOrders()).items.firstWhere(
         (o) => o.id == target.id,
       );
       expect(after.status, CustomerOrderStatus.cancelled);

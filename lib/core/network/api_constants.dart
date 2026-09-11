@@ -182,6 +182,20 @@ abstract final class ApiConstants {
   static String adminOrder(String id) => '/admin/orders/$id';
   static String adminOrderStatus(String id) => '/admin/orders/$id/status';
 
+  /// The approval step every order now waits at.
+  ///
+  /// Separate endpoints rather than a status PATCH, because approving is not a
+  /// step along the workflow -- it is what lets the workflow begin. A PATCH out
+  /// of `pending_approval` is refused with `ORDER_NOT_PENDING_APPROVAL`.
+  ///
+  /// Approving a cash order sends it to the kitchen as `placed`; approving a
+  /// card order makes it payable as `awaiting_payment`.
+  static String adminOrderApprove(String id) => '/admin/orders/$id/approve';
+
+  /// Declining takes it to `rejected`. Nothing has been charged at this point,
+  /// so there is nothing to refund. The reason is required.
+  static String adminOrderDecline(String id) => '/admin/orders/$id/decline';
+
   /// The admin landing screen. One request powers the whole thing — no
   /// pagination, no polling.
   static const String adminDashboard = '/admin/dashboard';

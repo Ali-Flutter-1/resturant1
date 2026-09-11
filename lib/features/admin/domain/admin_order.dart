@@ -6,9 +6,15 @@ import 'package:equatable/equatable.dart';
 /// integration guide is explicit that an older app must not crash on a status it
 /// has never heard of, and that the raw value should survive for logging.
 enum OrderStatus {
+  /// Where every order starts. The restaurant has not decided yet.
+  ///
+  /// Moved with approve/decline, **not** with a status PATCH -- the backend
+  /// refuses a transition out of this state and answers
+  /// `ORDER_NOT_PENDING_APPROVAL`.
+  pendingApproval('pending_approval', 'Needs approval', 'Awaiting approval'),
   awaitingPayment(
     'awaiting_payment',
-    'Awaiting payment',
+    'Approved - unpaid',
     'Waiting for payment',
   ),
   placed('placed', 'Placed', 'Order received'),
@@ -56,6 +62,11 @@ enum OrderStatus {
 
   /// Still in the kitchen's hands — what `open_only=true` returns.
   bool get isOpen => !isFinal && this != unknown;
+
+  /// Whether this order is waiting on the restaurant's decision.
+  ///
+  /// The one state that takes approve/decline rather than a status change.
+  bool get needsApproval => this == pendingApproval;
 
   /// Whether the payment provider is mid-operation on this order.
   ///
@@ -143,15 +154,18 @@ enum PaymentStatus {
 abstract final class OrderTransitions {
   static List<OrderStatus> nextFor(OrderStatus status, FulfilmentType type) =>
       switch (status) {
-        // An unpaid card order is not the kitchen's yet. Staff can refuse it,
-        // but they cannot start cooking something nobody has paid for.
+        // Approve and decline are their own endpoints; a status PATCH out of
+        // here is refused. The screen offers those two buttons instead, so
+        // there is deliberately no transition to list.
+        OrderStatus.pendingApproval => const [],
+        // Approved but not paid. Not the kitchen's yet -- staff can call it
+        // off, but they cannot start cooking something nobody has paid for.
         OrderStatus.awaitingPayment => [
           OrderStatus.rejected,
           OrderStatus.cancelled,
         ],
+        // An approved cash order, already with the kitchen.
         OrderStatus.placed => [
-          // Accepting a card order captures the hold; the backend moves it
-          // through acceptance_pending on the way to preparing.
           OrderStatus.preparing,
           OrderStatus.rejected,
           OrderStatus.cancelled,
@@ -292,6 +306,7 @@ class AdminOrder extends Equatable {
     required this.fulfilment,
     required this.paymentStatus,
     required this.totalPence,
+    this.isCard = false,
     required this.itemCount,
     required this.isAsap,
     this.placedAt,
@@ -320,6 +335,9 @@ class AdminOrder extends Equatable {
       rawStatus: json['status']?.toString(),
       fulfilment: FulfilmentType.fromApi(json['fulfilment_type']?.toString()),
       paymentStatus: PaymentStatus.fromApi(json['payment_status']?.toString()),
+      // Staff need this at the approval step: approving a cash order sends
+      // food out, approving a card order only asks for money.
+      isCard: json['payment_method']?.toString().toLowerCase() == 'card',
       totalPence: (json['total_pence'] as num?)?.toInt() ?? 0,
       itemCount: (json['item_count'] as num?)?.toInt() ?? 0,
       isAsap: json['is_asap'] != false,
@@ -354,6 +372,10 @@ class AdminOrder extends Equatable {
   final String? rawStatus;
   final FulfilmentType fulfilment;
   final PaymentStatus paymentStatus;
+
+  /// Whether the customer chose card. Cash orders never have a payment page.
+  final bool isCard;
+
   final int totalPence;
   final int itemCount;
   final bool isAsap;
@@ -410,6 +432,7 @@ class AdminOrder extends Equatable {
     status,
     fulfilment,
     paymentStatus,
+    isCard,
     totalPence,
     itemCount,
     isAsap,
@@ -432,6 +455,7 @@ class AdminOrder extends Equatable {
 class OrderStats extends Equatable {
   const OrderStats({
     this.openOrders = 0,
+    this.pendingApproval,
     this.placed = 0,
     this.preparing = 0,
     this.ready = 0,
@@ -442,6 +466,10 @@ class OrderStats extends Equatable {
 
   factory OrderStats.fromJson(Map<String, dynamic> json) => OrderStats(
     openOrders: (json['open_orders'] as num?)?.toInt() ?? 0,
+    // Nullable rather than defaulted to zero, because absent and none are
+    // different things here: a deployment that does not send this count must
+    // show no badge, not a confident "0 waiting" that could be wrong.
+    pendingApproval: (json['pending_approval'] as num?)?.toInt(),
     placed: (json['placed'] as num?)?.toInt() ?? 0,
     preparing: (json['preparing'] as num?)?.toInt() ?? 0,
     ready: (json['ready'] as num?)?.toInt() ?? 0,
@@ -451,6 +479,11 @@ class OrderStats extends Equatable {
   );
 
   final int openOrders;
+
+  /// How many orders are waiting on the restaurant's decision, where the
+  /// backend reports it. Null means it did not.
+  final int? pendingApproval;
+
   final int placed;
   final int preparing;
   final int ready;
@@ -467,6 +500,7 @@ class OrderStats extends Equatable {
   @override
   List<Object?> get props => [
     openOrders,
+    pendingApproval,
     placed,
     preparing,
     ready,

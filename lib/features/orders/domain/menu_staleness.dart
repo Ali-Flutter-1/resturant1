@@ -70,6 +70,26 @@ enum MenuStaleness {
   };
 }
 
+/// Where an order's own lifecycle refused the request.
+///
+/// Separate from the menu and delivery failures because the recovery is always
+/// the same: this screen is out of date. Somebody else moved the order --
+/// another member of staff approved it, the customer paid on another device,
+/// the kitchen started cooking -- so the fix is to re-read it, never to argue
+/// with the server about what state it is in.
+bool isStaleOrderFailure(ApiFailure failure) => switch (failure.code) {
+  // Tried to pay before the restaurant approved it.
+  'ORDER_NOT_APPROVED' ||
+  // Tried to approve or decline something already decided.
+  'ORDER_NOT_PENDING_APPROVAL' ||
+  'ORDER_ALREADY_PAID' ||
+  'ORDER_ALREADY_FINISHED' ||
+  'ORDER_TOO_LATE_TO_CANCEL' ||
+  'ORDER_STATUS_UNCHANGED' ||
+  'INVALID_STATUS_TRANSITION' => true,
+  _ => false,
+};
+
 /// Whether a failure is about delivery rather than the menu — the postcode, the
 /// zone, or the minimum spend.
 ///

@@ -140,6 +140,7 @@ class _QueueViewState extends State<_QueueView> {
               _QueueFilter(
                 selected: state.filter,
                 openOnly: state.openOnly,
+                waiting: state.waitingForApproval,
                 onStatus: cubit.filterBy,
                 onOpenOnly: cubit.showOpenOnly,
               ).revealItem(2),
@@ -175,10 +176,23 @@ class _QueueViewState extends State<_QueueView> {
                                   AppSpacing.x12 +
                                   MediaQuery.paddingOf(context).bottom,
                             ),
-                            itemCount: state.visible.length,
+                            // One extra row for the footer, where there is
+                            // another page to fetch. Searching filters what is
+                            // loaded, so the footer is hidden then -- "load
+                            // more" against a local filter would be a promise
+                            // the button cannot keep.
+                            itemCount:
+                                state.visible.length +
+                                (state.hasMore && !state.isSearching ? 1 : 0),
                             separatorBuilder: (_, _) =>
                                 const SizedBox(height: AppSpacing.x3),
                             itemBuilder: (context, index) {
+                              if (index >= state.visible.length) {
+                                return _QueueFooter(
+                                  loading: state.loadingMore,
+                                  onLoadMore: cubit.loadMore,
+                                );
+                              }
                               final order = state.visible[index];
                               return _OrderTicket(
                                 key: ValueKey(order.id),
@@ -330,6 +344,7 @@ class _QueueFilter extends StatelessWidget {
     required this.openOnly,
     required this.onStatus,
     required this.onOpenOnly,
+    this.waiting,
   });
 
   final OrderStatus? selected;
@@ -337,9 +352,18 @@ class _QueueFilter extends StatelessWidget {
   final ValueChanged<OrderStatus?> onStatus;
   final ValueChanged<bool> onOpenOnly;
 
+  /// How many orders are waiting on a decision, where the backend says. Null
+  /// means it does not report the figure, and the chip then carries no count
+  /// rather than an invented zero.
+  final int? waiting;
+
   /// Only the states an order can actually be in — `unknown` is a decoding
   /// fallback, not something to filter by.
   static const _filterable = [
+    // `pendingApproval` is deliberately absent: it has its own chip at the
+    // front of the strip, and offering it twice would put the most urgent
+    // queue in the least prominent place as well as the most.
+    OrderStatus.awaitingPayment,
     OrderStatus.placed,
     OrderStatus.preparing,
     OrderStatus.ready,
@@ -357,6 +381,19 @@ class _QueueFilter extends StatelessWidget {
         scrollDirection: Axis.horizontal,
         padding: const EdgeInsets.symmetric(horizontal: AppSpacing.gutter),
         children: [
+          // First, and first for a reason: an order nobody has approved is not
+          // being cooked and not being paid for. It is the only queue where
+          // nothing happens at all until somebody here acts.
+          _ApprovalsChip(
+            selected: selected == OrderStatus.pendingApproval,
+            waiting: waiting,
+            onSelected: () => onStatus(
+              selected == OrderStatus.pendingApproval
+                  ? null
+                  : OrderStatus.pendingApproval,
+            ),
+          ),
+          const SizedBox(width: AppSpacing.x2),
           SelectableChip(
             label: 'Kitchen queue',
             selected: openOnly && selected == null,
@@ -377,6 +414,124 @@ class _QueueFilter extends StatelessWidget {
             ),
           ],
         ],
+      ),
+    );
+  }
+}
+
+/// The end of the loaded queue, with a way to fetch more.
+class _QueueFooter extends StatelessWidget {
+  const _QueueFooter({required this.loading, required this.onLoadMore});
+
+  final bool loading;
+  final VoidCallback onLoadMore;
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: loading
+          ? const Padding(
+              padding: EdgeInsets.all(AppSpacing.x3),
+              child: SizedBox(
+                width: 20,
+                height: 20,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              ),
+            )
+          : OutlinedButton(
+              onPressed: onLoadMore,
+              child: const Text('Load more orders'),
+            ),
+    );
+  }
+}
+
+/// The approvals filter, with a count of what is waiting.
+///
+/// Drawn rather than reusing [SelectableChip] because it needs the number: a
+/// chip that says "Approvals" tells staff where to look, and one that says
+/// "Approvals 3" tells them whether to look now.
+class _ApprovalsChip extends StatelessWidget {
+  const _ApprovalsChip({
+    required this.selected,
+    required this.onSelected,
+    this.waiting,
+  });
+
+  final bool selected;
+  final VoidCallback onSelected;
+  final int? waiting;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final colours = context.orderColors;
+    final count = waiting ?? 0;
+    // Only when there is something to do. A permanent red dot reading zero is
+    // the fastest way to teach a kitchen to stop looking at it.
+    final urgent = count > 0;
+
+    return Semantics(
+      button: true,
+      selected: selected,
+      label: urgent
+          ? '$count orders waiting for approval'
+          : 'Orders waiting for approval',
+      child: Material(
+        color: selected
+            ? scheme.primary
+            : (urgent ? colours.overdueContainer : Colors.transparent),
+        borderRadius: BorderRadius.circular(AppRadius.pill),
+        child: InkWell(
+          onTap: () {
+            AppHaptics.selection();
+            onSelected();
+          },
+          borderRadius: BorderRadius.circular(AppRadius.pill),
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: AppSpacing.x3 + 2),
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(AppRadius.pill),
+              border: selected
+                  ? null
+                  : Border.all(
+                      color: urgent ? colours.overdue : context.surfaces.line,
+                    ),
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  'Approvals',
+                  style: context.texts.labelLarge?.copyWith(
+                    color: selected
+                        ? scheme.onPrimary
+                        : (urgent ? colours.overdue : scheme.onSurface),
+                  ),
+                ),
+                if (waiting != null && urgent) ...[
+                  const SizedBox(width: AppSpacing.x2),
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 6,
+                      vertical: 1,
+                    ),
+                    decoration: BoxDecoration(
+                      color: selected ? scheme.onPrimary : colours.overdue,
+                      borderRadius: BorderRadius.circular(AppRadius.pill),
+                    ),
+                    child: Text(
+                      '$count',
+                      style: context.texts.labelSmall?.copyWith(
+                        color: selected ? scheme.primary : Colors.white,
+                      ),
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
+        ),
       ),
     );
   }
@@ -565,6 +720,49 @@ class _OrderDetailState extends State<_OrderDetail> {
     if (detail?.id == widget.id) _last = detail;
   }
 
+  /// Takes the order: cash goes to the kitchen, card becomes payable.
+  Future<void> _approve() async {
+    final error = await context.read<AdminOrdersCubit>().approve(widget.id);
+    if (!mounted) return;
+
+    if (error != null) {
+      AppHaptics.failure();
+      showAppSnack(context, error, isError: true);
+      return;
+    }
+    AppHaptics.success();
+    Navigator.of(context).pop();
+    showAppSnack(context, 'Order approved. The customer has been told.');
+  }
+
+  /// Refuses the order. Nothing has been charged yet, so there is nothing to
+  /// refund -- but the customer is told, so the reason is required.
+  Future<void> _decline() async {
+    final reason = await _askReason(
+      context,
+      OrderStatus.rejected,
+      title: 'Decline this order?',
+      subtitle: 'Nothing has been charged. The customer is told why.',
+      action: 'Decline order',
+    );
+    if (reason == null || !mounted) return;
+
+    final error = await context.read<AdminOrdersCubit>().decline(
+      widget.id,
+      reason: reason,
+    );
+    if (!mounted) return;
+
+    if (error != null) {
+      AppHaptics.failure();
+      showAppSnack(context, error, isError: true);
+      return;
+    }
+    AppHaptics.success();
+    Navigator.of(context).pop();
+    showAppSnack(context, 'Order declined.');
+  }
+
   Future<void> _change(OrderStatus next) async {
     // Rejecting or cancelling asks for a reason, which the API stores as the
     // cancellation reason — the customer is told, so it should not be blank.
@@ -731,11 +929,22 @@ class _OrderDetailState extends State<_OrderDetail> {
               ),
               const SizedBox(height: AppSpacing.x5),
 
+              // The decision that gates everything else. Until it is made the
+              // order is not the kitchen's, nothing has been charged, and no
+              // status move is legal -- so this is the only thing on offer.
+              if (order.status.needsApproval) ...[
+                _ApprovalActions(
+                  order: order,
+                  busy: busy,
+                  onApprove: _approve,
+                  onDecline: _decline,
+                ),
+              ]
               // Money is moving at the provider. Say so plainly and offer
               // nothing to tap: the accept or the cancel has already been
               // recorded, and a second tap here would be a second attempt at a
               // payment that is already in flight.
-              if (order.status.isSettling ||
+              else if (order.status.isSettling ||
                   order.paymentStatus.isSettling) ...[
                 _SettlingNotice(order: order),
               ] else if (order.nextStatuses.isEmpty)
@@ -772,6 +981,73 @@ class _OrderDetailState extends State<_OrderDetail> {
           ),
         );
       },
+    );
+  }
+}
+
+/// The approve / decline decision, which every order now waits at.
+///
+/// Deliberately the only thing on the sheet in this state. Approving is what
+/// starts the workflow -- for a cash order it sends the ticket to the kitchen,
+/// for a card order it lets the customer pay -- and until it happens no status
+/// move is legal, so offering one would be offering a 409.
+class _ApprovalActions extends StatelessWidget {
+  const _ApprovalActions({
+    required this.order,
+    required this.busy,
+    required this.onApprove,
+    required this.onDecline,
+  });
+
+  final AdminOrder order;
+  final bool busy;
+  final VoidCallback onApprove;
+  final VoidCallback onDecline;
+
+  @override
+  Widget build(BuildContext context) {
+    final card = order.isCard;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Text('Approve this order?', style: context.texts.titleMedium),
+        const SizedBox(height: AppSpacing.x1),
+        Text(
+          // What approving actually does differs by payment method, and the
+          // difference matters: one sends food out, the other only asks for
+          // money. Staff should know which before tapping.
+          card
+              ? 'Approving lets the customer pay. The kitchen gets it once the '
+                    'payment clears — nothing has been charged yet.'
+              : 'Approving sends it straight to the kitchen. Payment is taken '
+                    'on handover.',
+          style: context.texts.bodySmall?.copyWith(
+            color: context.surfaces.inkMuted,
+          ),
+        ),
+        const SizedBox(height: AppSpacing.x4),
+        FilledButton(
+          onPressed: busy ? null : onApprove,
+          style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(50)),
+          child: busy
+              ? const SizedBox(
+                  width: AppIconSize.md,
+                  height: AppIconSize.md,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                )
+              : const Text('Approve order'),
+        ),
+        const SizedBox(height: AppSpacing.x2),
+        TextButton(
+          onPressed: busy ? null : onDecline,
+          style: TextButton.styleFrom(
+            minimumSize: const Size.fromHeight(48),
+            foregroundColor: context.orderColors.overdue,
+          ),
+          child: const Text('Decline'),
+        ),
+      ],
     );
   }
 }
@@ -897,14 +1173,22 @@ class _MoveButton extends StatelessWidget {
 }
 
 /// Asks why, before cancelling or rejecting.
-Future<String?> _askReason(BuildContext context, OrderStatus status) {
+Future<String?> _askReason(
+  BuildContext context,
+  OrderStatus status, {
+  String? title,
+  String? subtitle,
+  String? action,
+}) {
   final controller = TextEditingController();
   return showAppSheet<String>(
     context: context,
-    title: status == OrderStatus.rejected
-        ? 'Reject this order?'
-        : 'Cancel this order?',
-    subtitle: 'The customer is told, so a reason helps.',
+    title:
+        title ??
+        (status == OrderStatus.rejected
+            ? 'Reject this order?'
+            : 'Cancel this order?'),
+    subtitle: subtitle ?? 'The customer is told, so a reason helps.',
     child: Builder(
       builder: (sheetContext) => Padding(
         padding: pagePadding(
@@ -942,9 +1226,10 @@ Future<String?> _askReason(BuildContext context, OrderStatus status) {
                         sheetContext,
                       ).pop(controller.text.trim()),
                 child: Text(
-                  status == OrderStatus.rejected
-                      ? 'Reject order'
-                      : 'Cancel order',
+                  action ??
+                      (status == OrderStatus.rejected
+                          ? 'Reject order'
+                          : 'Cancel order'),
                 ),
               ),
             ),

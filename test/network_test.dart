@@ -587,8 +587,11 @@ void main() {
       );
 
       expect(order.isCard, isTrue);
-      expect(order.needsPayment, isTrue);
       expect(order.paymentUrl, 'https://hpp-sandbox.worldpay.com/x');
+      // A page in the placement response is no longer enough on its own: the
+      // order has to have been approved before anything is payable. This
+      // fixture has no status, which reads as `placed`.
+      expect(order.needsPayment, isFalse);
     });
   });
 

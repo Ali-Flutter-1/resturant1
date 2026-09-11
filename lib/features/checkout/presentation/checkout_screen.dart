@@ -173,16 +173,20 @@ class _CheckoutViewState extends State<_CheckoutView> {
     final order = cubit.state.placedOrder;
     if (order == null) return;
 
-    // What the customer is told depends on where the money got to, because it
-    // decides whether the kitchen has the order at all. A card order that has
-    // not been paid for is held back until the payment webhook lands, so
-    // telling them it is being prepared would be a lie they act on.
-    // A payment attempt that never got as far as a page reports its own
-    // reason. Falling through to "still confirming" would describe a payment
-    // that was never started.
+    // What the customer is told has to match where the order actually is, and
+    // that is now the approval step rather than the money. Every new order --
+    // cash and card alike -- waits for the restaurant to say yes, so nothing
+    // here may claim the kitchen has it.
+    //
+    // The later cases are kept for the deployments and edge paths where an
+    // order comes back already approved; they are not the normal route.
     final paymentFailure = cubit.state.failure;
     final message = switch (order) {
-      _ when !order.isCard => 'Order ${order.reference} placed.',
+      // The normal case, both payment methods.
+      _ when order.awaitingApproval =>
+        'Order ${order.reference} sent. Waiting for the restaurant to approve '
+            'it.',
+      _ when !order.isCard => 'Order ${order.reference} confirmed.',
       _ when !order.isPaid && paymentFailure != null =>
         '${order.reference} placed. ${paymentFailure.message}',
       _ when order.isPaid =>
@@ -193,7 +197,9 @@ class _CheckoutViewState extends State<_CheckoutView> {
       // Neither a success nor a failure, and worth saying so exactly.
       _ => "We're still confirming your payment for ${order.reference}.",
     };
-    final wentWrong = order.isCard && !order.isPaid;
+    // Waiting for approval is the expected outcome, not a problem -- so it
+    // gets the success haptic and no error styling.
+    final wentWrong = order.isCard && !order.awaitingApproval && !order.isPaid;
 
     wentWrong ? AppHaptics.failure() : AppHaptics.success();
     showAppSnack(context, message, isError: wentWrong);
@@ -397,6 +403,7 @@ class _CheckoutViewState extends State<_CheckoutView> {
                     _PaymentMethodPicker(
                       method: state.paymentMethod,
                       isDelivery: state.isDelivery,
+                      cardUnavailable: state.cardUnavailable,
                       onChanged: (method) => context
                           .read<CheckoutCubit>()
                           .setPaymentMethod(method),
@@ -1041,11 +1048,16 @@ class _PaymentMethodPicker extends StatelessWidget {
     required this.method,
     required this.isDelivery,
     required this.onChanged,
+    this.cardUnavailable = false,
   });
 
   final PaymentMethod method;
   final bool isDelivery;
   final ValueChanged<PaymentMethod> onChanged;
+
+  /// Set once this backend has answered `CARD_PAYMENT_UNAVAILABLE`. Until
+  /// then card is offered, because most deployments have it.
+  final bool cardUnavailable;
 
   @override
   Widget build(BuildContext context) {
@@ -1061,20 +1073,23 @@ class _PaymentMethodPicker extends StatelessWidget {
             onTap: () => onChanged(PaymentMethod.cash),
           ),
           const SizedBox(height: AppSpacing.x3),
-          // Advertised, not offered.
+          // Offered unless this deployment has told us otherwise.
           //
-          // The card path is built and covered by tests, but the backend
-          // cannot reach the payment provider yet -- it returns an order with
-          // no payment page. Letting somebody pick this would walk them
-          // through checkout into a dead end, so it is shown greyed and every
-          // order goes through as cash.
+          // Whether card works is a property of the backend, not of the app,
+          // so it is no longer hardcoded here -- that left the option greyed
+          // out on a server that supported it perfectly well. A deployment
+          // with no Worldpay credentials answers CARD_PAYMENT_UNAVAILABLE when
+          // the order is placed, and the checkout then says so and falls back
+          // to cash rather than stranding anyone.
           _PaymentOption(
             icon: Icons.credit_card,
             title: 'Card',
-            detail: 'Coming soon. Pay the restaurant directly for now.',
-            selected: false,
-            enabled: false,
-            onTap: null,
+            detail: cardUnavailable
+                ? 'Not available right now. Pay the restaurant directly.'
+                : 'Pay online once the restaurant approves your order.',
+            selected: method == PaymentMethod.card,
+            enabled: !cardUnavailable,
+            onTap: cardUnavailable ? null : () => onChanged(PaymentMethod.card),
           ),
         ],
       ),

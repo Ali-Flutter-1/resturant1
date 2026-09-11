@@ -42,6 +42,161 @@ void main() {
     ),
   );
 
+  group('the approval step', () {
+    AdminOrder pending({bool card = false}) => AdminOrder(
+      id: 'p1',
+      orderNumber: 'ZZ99',
+      status: OrderStatus.pendingApproval,
+      fulfilment: FulfilmentType.collection,
+      paymentStatus: PaymentStatus.pending,
+      isCard: card,
+      totalPence: 1200,
+      itemCount: 1,
+      isAsap: true,
+      placedAt: DateTime(2026, 9, 11, 18, 30),
+      contactName: 'Ali Hassan',
+      contactPhone: '07700 900123',
+    );
+
+    test(
+      'the approvals queue is asked for by status, not filtered locally',
+      () async {
+        final repository = FakeAdminOrderRepository(
+          orders: [pending(), ...FakeAdminOrderRepository.defaults],
+        );
+        final cubit = AdminOrdersCubit(repository: repository);
+        await cubit.load();
+
+        await cubit.filterBy(OrderStatus.pendingApproval);
+
+        // Asked for, because the queue is paginated -- a view built by
+        // filtering the loaded page would be missing the orders on page two.
+        expect(repository.lastFilter, OrderStatus.pendingApproval);
+        expect(repository.lastOpenOnly, isFalse);
+        expect(cubit.state.orders.single.status, OrderStatus.pendingApproval);
+        await cubit.close();
+      },
+    );
+
+    test('the chip counts what is waiting', () async {
+      final repository = FakeAdminOrderRepository(
+        orders: [pending(), ...FakeAdminOrderRepository.defaults],
+      );
+      final cubit = AdminOrdersCubit(repository: repository);
+      await cubit.load();
+
+      // Counted from the page when the backend reports no figure of its own.
+      expect(cubit.state.waitingForApproval, 1);
+      await cubit.close();
+    });
+
+    test('a backend that reports the count is believed over the page', () {
+      const state = AdminOrdersState(
+        stats: OrderStats(pendingApproval: 12),
+        orders: [],
+      );
+      // The server's number covers every page; a local count never can.
+      expect(state.waitingForApproval, 12);
+    });
+
+    test('no count at all is shown as nothing rather than as zero', () {
+      const state = AdminOrdersState(stats: OrderStats(), orders: []);
+      // Absent and none are different: a confident "0 waiting" that is wrong
+      // is worse than no badge.
+      expect(state.waitingForApproval, isNull);
+    });
+
+    test('an order awaiting approval offers no status moves at all', () {
+      // Approve and decline are their own endpoints. A status PATCH out of
+      // this state is refused, so a button for one would be a 409 waiting to
+      // be tapped.
+      for (final type in FulfilmentType.values) {
+        expect(
+          OrderTransitions.nextFor(OrderStatus.pendingApproval, type),
+          isEmpty,
+        );
+      }
+      expect(OrderStatus.pendingApproval.needsApproval, isTrue);
+      expect(OrderStatus.pendingApproval.isOpen, isTrue);
+    });
+
+    test('approving a cash order sends it to the kitchen', () async {
+      final repository = FakeAdminOrderRepository(orders: [pending()]);
+      final cubit = AdminOrdersCubit(repository: repository);
+      await cubit.load();
+
+      expect(await cubit.approve('p1'), isNull);
+
+      expect(repository.approved, ['p1']);
+      // The dedicated endpoint, not a status change smuggled through PATCH.
+      expect(repository.lastStatusChange, isNull);
+      expect(cubit.state.orders.single.status, OrderStatus.placed);
+      await cubit.close();
+    });
+
+    test('approving a card order makes it payable, not cooked', () async {
+      final repository = FakeAdminOrderRepository(
+        orders: [pending(card: true)],
+      );
+      final cubit = AdminOrdersCubit(repository: repository);
+      await cubit.load();
+
+      await cubit.approve('p1');
+
+      // The kitchen gets it only once the money clears.
+      expect(cubit.state.orders.single.status, OrderStatus.awaitingPayment);
+      await cubit.close();
+    });
+
+    test('declining sends the reason the customer is shown', () async {
+      final repository = FakeAdminOrderRepository(orders: [pending()]);
+      final cubit = AdminOrdersCubit(repository: repository);
+      await cubit.load();
+
+      expect(await cubit.decline('p1', reason: 'Kitchen closed early'), isNull);
+
+      expect(repository.lastDecline, {
+        'id': 'p1',
+        'reason': 'Kitchen closed early',
+      });
+      // A declined order is finished, so it leaves the open queue the screen
+      // defaults to -- the same way a completed one does.
+      expect(cubit.state.orders, isEmpty);
+      await cubit.close();
+    });
+
+    test('an order already decided is refused without a round trip', () async {
+      final repository = FakeAdminOrderRepository();
+      final cubit = AdminOrdersCubit(repository: repository);
+      await cubit.load();
+
+      // `o1` is already placed. Another member of staff got there first.
+      final message = await cubit.approve('o1');
+
+      expect(message, isNotNull);
+      expect(repository.approved, isEmpty);
+      await cubit.close();
+    });
+
+    test('a conflict re-reads the order rather than arguing with it', () async {
+      final repository = FakeAdminOrderRepository(orders: [pending()])
+        ..statusFailure = const ApiFailure(
+          kind: ApiFailureKind.conflict,
+          code: 'ORDER_NOT_PENDING_APPROVAL',
+          message: 'Somebody already decided this one.',
+        );
+      final cubit = AdminOrdersCubit(repository: repository);
+      await cubit.load();
+
+      final message = await cubit.approve('p1');
+
+      expect(message, 'Somebody already decided this one.');
+      // Nothing is left spinning.
+      expect(cubit.state.busyIds, isEmpty);
+      await cubit.close();
+    });
+  });
+
   group('the documented status machine', () {
     test('a collection order completes straight from ready', () {
       expect(

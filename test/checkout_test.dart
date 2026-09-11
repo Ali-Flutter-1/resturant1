@@ -8,6 +8,7 @@ import 'package:practice/features/menu/domain/spice_level.dart';
 import 'package:practice/features/checkout/presentation/checkout_cubit.dart';
 import 'package:practice/features/checkout/presentation/checkout_screen.dart';
 import 'package:practice/features/menu/domain/dish.dart';
+import 'package:practice/features/orders/domain/customer_order.dart';
 import 'package:practice/features/orders/domain/order_quote.dart';
 import 'package:practice/features/delivery/domain/delivery_zone_repository.dart';
 import 'package:practice/features/orders/domain/order_repository.dart';
@@ -476,23 +477,25 @@ void main() {
       expect(find.textContaining('Place order'), findsOne);
     });
 
-    testWidgets('card is advertised but cannot be chosen yet', (tester) async {
+    testWidgets('card can be chosen', (tester) async {
+      // This used to assert the opposite -- that card was shown greyed with
+      // "Coming soon" -- which was true of one deployment and hardcoded into
+      // the app, so a backend that supported card showed it disabled anyway.
       await tester.pumpWidget(wrap());
       await tester.pump(const Duration(seconds: 2));
       await enterPostcode(tester);
 
-      // Shown, so "card is coming" is visible rather than the option simply
-      // being absent, which reads as a fault.
       expect(find.text('Card'), findsOne);
-      expect(find.textContaining('Coming soon'), findsOne);
+      expect(find.textContaining('Coming soon'), findsNothing);
 
-      await tester.tap(find.text('Card'), warnIfMissed: false);
+      await tester.tap(find.text('Card'));
       await tester.pumpAndSettle();
 
-      // Inert: the backend cannot produce a payment page yet, so choosing it
-      // would walk the customer into a dead end. The order stays cash.
-      expect(find.textContaining('Place order'), findsOne);
-      expect(find.textContaining('Pay ·'), findsNothing);
+      // Chosen, not ignored: the button changes from "Place order" to "Pay".
+      // Whether the backend can actually take a card is answered when the
+      // order is placed, not guessed at here.
+      expect(find.textContaining('Pay'), findsWidgets);
+      expect(find.textContaining('Place order'), findsNothing);
     });
 
     testWidgets('offers two timing choices rather than a wall of chips', (
@@ -688,6 +691,57 @@ void main() {
 
       // An unexplained gap in the times reads as a bug.
       expect(find.textContaining('takes about 25 minutes to cook'), findsOne);
+    });
+  });
+
+  group('choosing how to pay', () {
+    test('card is offered by default', () {
+      // Whether Worldpay is configured is the backend's business. Hardcoding
+      // it off in the app left the option greyed out on a server that
+      // supported it perfectly well.
+      expect(const CheckoutState().cardUnavailable, isFalse);
+    });
+
+    test(
+      'a deployment with no provider says so, and cash takes over',
+      () async {
+        repository.placeFailure = const ApiFailure(
+          kind: ApiFailureKind.invalid,
+          code: 'CARD_PAYMENT_UNAVAILABLE',
+          message: 'Card payment is not available.',
+        );
+        final cubit = buildCubit()..setPaymentMethod(PaymentMethod.card);
+        await cubit.quote();
+
+        final failure = await cubit.place(
+          contactName: 'Ali',
+          contactPhone: '07700 900123',
+        );
+
+        expect(failure?.code, 'CARD_PAYMENT_UNAVAILABLE');
+        // Remembered, so the option greys itself out rather than inviting the
+        // same refusal again...
+        expect(cubit.state.cardUnavailable, isTrue);
+        // ...and the choice moves back to cash, so the next tap of Place Order
+        // succeeds instead of repeating it.
+        expect(cubit.state.paymentMethod, PaymentMethod.cash);
+        await cubit.close();
+      },
+    );
+
+    test('an unrelated failure leaves the card option alone', () async {
+      repository.placeFailure = const ApiFailure(
+        kind: ApiFailureKind.offline,
+        message: 'Offline.',
+      );
+      final cubit = buildCubit()..setPaymentMethod(PaymentMethod.card);
+      await cubit.quote();
+
+      await cubit.place(contactName: 'Ali', contactPhone: '07700 900123');
+
+      expect(cubit.state.cardUnavailable, isFalse);
+      expect(cubit.state.paymentMethod, PaymentMethod.card);
+      await cubit.close();
     });
   });
 }

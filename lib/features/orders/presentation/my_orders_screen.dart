@@ -197,15 +197,36 @@ class _MyOrdersViewState extends State<_MyOrdersView> {
                   child: _PastOrderRow(order: order),
                 ),
             ],
+            // Only where there is more history to fetch. A button that comes
+            // back with nothing is worse than no button.
+            if (state.hasMore)
+              (_) => Padding(
+                padding: const EdgeInsets.only(top: AppSpacing.x2),
+                child: Center(
+                  child: state.loadingMore
+                      ? const Padding(
+                          padding: EdgeInsets.all(AppSpacing.x3),
+                          child: SizedBox(
+                            width: 20,
+                            height: 20,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          ),
+                        )
+                      : OutlinedButton(
+                          onPressed: cubit.loadMore,
+                          child: const Text('Load earlier orders'),
+                        ),
+                ),
+              ),
           ];
 
           return RefreshIndicator(
             onRefresh: () =>
                 refreshWithSession(context, () => cubit.load(silent: true)),
-            // Built one row at a time rather than all at once. The list
-            // endpoint returns up to fifty orders, and this screen rebuilds on
-            // every poll tick -- constructing fifty cards to show three was
-            // most of the work the screen did.
+            // Built one row at a time rather than all at once. The screen
+            // rebuilds on every poll tick, and constructing a page of cards to
+            // show three was most of the work it did. Pagination makes this
+            // matter more, not less: the list only grows from here.
             //
             // The closures below are the cheap part: making them costs nothing,
             // and only the ones on screen are ever called.

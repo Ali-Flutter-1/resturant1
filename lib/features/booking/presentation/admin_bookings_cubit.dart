@@ -2,7 +2,6 @@ import 'package:equatable/equatable.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 
 import '../../../core/network/api_failure.dart';
-import '../../../core/network/page_data.dart';
 import '../domain/reservation.dart';
 import '../domain/reservation_repository.dart';
 
@@ -18,6 +17,9 @@ class AdminBookingsState extends Equatable {
     this.detail,
     this.failure,
     this.busyIds = const {},
+    this.page = 1,
+    this.totalPages = 0,
+    this.loadingMore = false,
   });
 
   /// The day's sheet. Null means every upcoming booking rather than one date.
@@ -25,6 +27,14 @@ class AdminBookingsState extends Equatable {
 
   final AdminBookingsStatus status;
   final List<ReservationSummary> bookings;
+
+  /// The last page fetched and how many there are.
+  final int page;
+  final int totalPages;
+  final bool loadingMore;
+
+  /// Whether another page of bookings exists.
+  bool get hasMore => page < totalPages;
   final ReservationStats stats;
 
   /// Null shows every status.
@@ -48,6 +58,9 @@ class AdminBookingsState extends Equatable {
     ReservationDetail? detail,
     ApiFailure? failure,
     Set<String>? busyIds,
+    int? page,
+    int? totalPages,
+    bool? loadingMore,
     bool clearDate = false,
     bool clearFilter = false,
     bool clearFailure = false,
@@ -57,6 +70,9 @@ class AdminBookingsState extends Equatable {
       date: clearDate ? null : (date ?? this.date),
       status: status ?? this.status,
       bookings: bookings ?? this.bookings,
+      page: page ?? this.page,
+      totalPages: totalPages ?? this.totalPages,
+      loadingMore: loadingMore ?? this.loadingMore,
       stats: stats ?? this.stats,
       filter: clearFilter ? null : (filter ?? this.filter),
       detail: clearDetail ? null : (detail ?? this.detail),
@@ -67,6 +83,9 @@ class AdminBookingsState extends Equatable {
 
   @override
   List<Object?> get props => [
+    page,
+    totalPages,
+    loadingMore,
     date,
     status,
     bookings,
@@ -118,21 +137,25 @@ class AdminBookingsCubit extends Cubit<AdminBookingsState> {
     }
 
     try {
-      final results = await Future.wait<Object>([
-        _repository.adminReservations(
-          page: 1,
-          pageSize: 100,
-          date: state.date,
-          status: state.filter,
-        ),
-        _repository.adminStats(),
-      ]);
+      // Awaited in turn and emitted once, so the sheet and the counters above
+      // it are never a refresh out of step. Not `Future.wait`: its list form
+      // loses both types and needs the casts that used to be here, and its
+      // record form wraps a failure in a `ParallelWaitError` the catch below
+      // would not recognise.
+      final page = await _repository.adminReservations(
+        date: state.date,
+        status: state.filter,
+      );
+      final stats = await _repository.adminStats();
 
       emit(
         state.copyWith(
           status: AdminBookingsStatus.ready,
-          bookings: (results[0] as PageData<ReservationSummary>).items,
-          stats: results[1] as ReservationStats,
+          bookings: page.items,
+          page: page.page,
+          totalPages: page.totalPages,
+          loadingMore: false,
+          stats: stats,
           clearFailure: true,
         ),
       );
@@ -148,12 +171,39 @@ class AdminBookingsCubit extends Cubit<AdminBookingsState> {
     }
   }
 
+  /// Fetches the next page of the sheet and appends it.
+  Future<void> loadMore() async {
+    if (!state.hasMore || state.loadingMore) return;
+    emit(state.copyWith(loadingMore: true, clearFailure: true));
+
+    try {
+      final next = await _repository.adminReservations(
+        page: state.page + 1,
+        date: state.date,
+        status: state.filter,
+      );
+      emit(
+        state.copyWith(
+          bookings: [...state.bookings, ...next.items],
+          page: next.page,
+          totalPages: next.totalPages,
+          loadingMore: false,
+        ),
+      );
+    } on ApiFailure catch (failure) {
+      // The sheet already on screen stays; only the footer reports it.
+      emit(state.copyWith(loadingMore: false, failure: failure));
+    }
+  }
+
   Future<void> setFilter(ReservationStatus? status) async {
     if (status == state.filter) return;
+    // Page one: a different filter is a different list, not more of this one.
     emit(
-      status == null
-          ? state.copyWith(clearFilter: true)
-          : state.copyWith(filter: status),
+      (status == null
+              ? state.copyWith(clearFilter: true)
+              : state.copyWith(filter: status))
+          .copyWith(page: 1, totalPages: 0),
     );
     await load(silent: state.bookings.isNotEmpty);
   }

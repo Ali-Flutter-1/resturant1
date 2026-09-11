@@ -1,3 +1,4 @@
+import '../../../core/network/page_data.dart';
 import '../../cart/cart_cubit.dart';
 import 'customer_order.dart';
 import 'order_quote.dart';
@@ -48,8 +49,12 @@ abstract interface class OrderRepository {
     String? customerNote,
   });
 
-  /// Newest first.
-  Future<List<CustomerOrder>> myOrders();
+  /// Newest first, one page at a time.
+  ///
+  /// Paginated rather than fetched whole: the endpoint caps at 100 a page, and
+  /// a regular customer's history outgrows any single request eventually. The
+  /// screen appends pages as it is scrolled.
+  Future<PageData<CustomerOrder>> myOrders({int page = 1, int pageSize = 20});
 
   /// A payment page for an unpaid card order.
   ///

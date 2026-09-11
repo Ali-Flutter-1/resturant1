@@ -1,3 +1,4 @@
+import '../../../core/network/page_data.dart';
 import '../../menu/domain/dish.dart';
 import 'dish_configuration_draft.dart';
 
@@ -58,7 +59,12 @@ abstract interface class AdminMenuRepository {
   Future<MenuCategory> removeCategoryLogo(String categoryId);
 
   /// Every dish, optionally narrowed to one category.
-  Future<List<Dish>> dishes({String? categoryId});
+  /// One page at a time, like the public menu.
+  Future<PageData<Dish>> dishes({
+    String? categoryId,
+    int page = 1,
+    int pageSize = 40,
+  });
 
   /// Uploads photographs and returns what to send as a dish's `images`.
   ///
